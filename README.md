@@ -1,258 +1,228 @@
-# Spring Boot SaaS Boilerplate
+# Job Orchestrator
 
-A production-grade, opinionated starter for building SaaS products with Spring Boot 3 and Java 21. Comes with JWT authentication, refresh token rotation, PostgreSQL, Redis, Docker, and structured logging — so you can skip the boring infrastructure setup and start building your actual product.
+An asynchronous job processing service, built in three phases: clean architecture, then scalability, then distributed and event-driven. Java 21, Spring Boot 3, PostgreSQL.
 
-![Java](https://img.shields.io/badge/Java-21-orange?style=flat-square&logo=openjdk)
-![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.4-brightgreen?style=flat-square&logo=spring)
-![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue?style=flat-square&logo=postgresql)
-![Redis](https://img.shields.io/badge/Redis-7-red?style=flat-square&logo=redis)
-![Docker](https://img.shields.io/badge/Docker-ready-blue?style=flat-square&logo=docker)
-![License](https://img.shields.io/badge/License-MIT-yellow?style=flat-square)
+You submit a job, you get an ID back immediately, workers run it in the background, and you poll the ID to see how it went.
+
+**Current status: Phase 1 is done.** The system is synchronous and single-service right now, and that's deliberate. Phase 3 is where it becomes distributed, and the contrast between the two is the whole point. See the [roadmap](#roadmap).
 
 ---
 
 ## Why this exists
 
-Every time I start a new SaaS idea, I waste the first week wiring up the same things: auth, refresh tokens, database migrations, exception handling, Docker setup, logging. It's busywork that has nothing to do with the product I actually want to build.
+I wanted to prove I can design an async job-processing system and defend every decision in it, not just get it working.
 
-So I built this once, properly, and now every new project starts from here. Maybe it'll save you a week too.
+So this repo optimizes for something unusual: the reasoning is the deliverable. Every non-obvious choice has an [ADR](docs/adr/) explaining what I picked, what I gave up, and when I'd change my mind. The code is small. The thinking is the point.
 
-This isn't a tutorial repo. It's a working foundation I use for real products. Every decision in here is made because I needed it, not because it looked good on a checklist.
-
----
-
-## What's inside
-
-- **JWT authentication** with refresh token rotation (Redis-backed, opaque UUID tokens)
-- **PostgreSQL** with **Flyway** migrations (version-controlled schema)
-- **Redis** for refresh token storage and caching
-- **Spring Security 6** configured for stateless JWT (no sessions, no CSRF headache)
-- **Docker Compose** for local dev — Postgres + Redis up in one command
-- **Multi-stage Dockerfile** for production builds
-- **Sentry** integration for error tracking
-- **Structured JSON logging** (Logback + Logstash encoder) for production observability
-- **Global exception handler** with RFC 7807 Problem Details format
-- **GitHub Actions** CI pipeline
-- **Feature-based package structure** (not the old `controller/service/repository` layout)
+It's not a product. Nobody's going to use it to send emails.
 
 ---
 
-## Architecture at a glance
+## How it works
+
+A job moves through four states, and it can't cheat:
 
 ```
-┌─────────────┐     HTTP      ┌──────────────────┐
-│   Client    │ ────────────▶ │  AuthController  │
-└─────────────┘   Bearer JWT  └────────┬─────────┘
-                                       │
-                              ┌────────▼─────────┐
-                              │  JwtAuth Filter  │  ← validates token on every request
-                              └────────┬─────────┘
-                                       │
-                              ┌────────▼─────────┐
-                              │   AuthService    │
-                              └────┬────────┬────┘
-                                   │        │
-                          ┌────────▼──┐  ┌──▼──────────────┐
-                          │ Postgres  │  │ RefreshTokenSvc │
-                          │  (users)  │  │   ↓ Redis       │
-                          └───────────┘  └─────────────────┘
+PENDING ──► RUNNING ──► DONE
+                 └────► FAILED
 ```
 
-Short version: Stateless auth. JWT for access (15 min). Opaque refresh tokens in Redis (7 days, rotated on every use). Spring Security wires it together.
+Invalid transitions are impossible, not discouraged. `PENDING -> DONE` throws. `DONE -> RUNNING` throws. The `Job` object refuses to be put into an inconsistent state, so no caller can bypass the rules — not the controller, not a future worker, not me at 2am.
+
+There is deliberately no endpoint to set a job's status. More on that below.
+
+---
+
+## Architecture
+
+Hexagonal (ports and adapters). Three layers, dependencies point inward:
+
+```
+infrastructure/          Spring, JPA and HTTP live here
+  web/                   JobController, request/response DTOs
+  persistence/           JobEntity, JpaJobRepositoryAdapter
+  JobBeanConfig          wires use cases into Spring
+        |
+        | depends on
+        v
+application/             Pure Java, no framework
+  JobRepository          the port — an interface I own
+  CreateJobService
+  GetJobService
+        |
+        | depends on
+        v
+domain/                  Pure Java, no framework
+  Job, JobStatus         the rules live here
+```
+
+`domain/` and `application/` contain zero Spring or JPA imports. The test for whether that's real: if I deleted Spring Boot, could I still test my business rules? Yes — 11 of the tests here run with no database, no Spring context and no Docker, in 0.14 seconds total.
+
+Everything about jobs lives under `job/`. Package-by-feature, not `controller/` + `service/` + `entity/`. When Phase 3 adds a worker, it gets its own folder instead of smearing across five existing ones.
 
 ---
 
 ## Tech stack
 
 | Layer | Choice | Why |
-|---|---|---|
-| Language | Java 21 (LTS) | Virtual threads + modern syntax (records, pattern matching) |
-| Framework | Spring Boot 3.4 | Jakarta EE 10, native support, mature ecosystem |
-| Security | Spring Security 6 + JJWT 0.12 | Industry standard for stateless auth |
-| Database | PostgreSQL 16 | Boring is good. Battle-tested, JSON support, full-text search |
-| Migrations | Flyway | SQL files in version control. No ORM-generated schema surprises |
-| Cache & sessions | Redis 7 | Fast TTL-backed storage for refresh tokens and hot data |
-| Build | Maven (via Maven Wrapper) | `./mvnw` works on any machine, no global install needed |
-| Logging | Logback + Logstash Encoder | JSON logs in prod, human-readable in dev |
-| Error tracking | Sentry | Free tier covers small SaaS easily |
-| Containerization | Docker + Docker Compose | Same image runs locally and in production |
-| CI | GitHub Actions | Built-in, free for public repos |
+|-------|--------|-----|
+| Language | Java 21 (LTS) | Records, virtual threads, pattern matching |
+| Framework | Spring Boot 3.4 | Jakarta EE 10, mature ecosystem |
+| Database | PostgreSQL 16 | Boring is good |
+| Migrations | Flyway | Versioned SQL in git. `ddl-auto` is `validate`, so Hibernate never touches the schema |
+| Build | Maven (wrapper) | `./mvnw` works anywhere, no global install |
+| API docs | springdoc-openapi | Swagger UI at `/swagger-ui.html` |
+| Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
+| Cache | Redis 7 | Wired but dormant, Phase 2 will use it |
+| Containers | Docker Compose | Postgres and Redis in one command |
+| CI | GitHub Actions | Tests run on every push |
 
 ---
 
 ## Quick start
 
-You need Java 21, Docker, and Git installed. That's it.
+You need Java 21 and Docker.
 
 ```bash
-# 1. Clone
-git clone https://github.com/erdemsidal/boilerplatespring.git
-cd boilerplatespring
+git clone https://github.com/erdemsidal/orchestra.git
+cd orchestra
 
-# 2. Copy environment template and fill in your secrets
-cp .env.example .env
-# Open .env and set JWT_SECRET (use a base64 string of at least 64 bytes)
+# Postgres + Redis
+docker compose up -d
 
-# 3. Start PostgreSQL and Redis in Docker
-docker compose up -d postgres redis
-
-# 4. Run the app locally
+# Flyway creates the schema on startup
 ./mvnw spring-boot:run
 ```
 
-The app is now running on `http://localhost:8080`.
+The app runs on `http://localhost:8080`. Swagger UI is at `http://localhost:8080/swagger-ui.html`.
 
-To generate a valid JWT secret on Windows PowerShell:
-```powershell
-[Convert]::ToBase64String((1..64 | ForEach-Object { Get-Random -Minimum 0 -Maximum 256 }))
-```
+Try it:
 
-On Linux/Mac:
 ```bash
-openssl rand -base64 64
+curl -X POST http://localhost:8080/api/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type":"send-email"}'
+# 201 {"id":"b4f43279-...","type":"send-email","status":"PENDING"}
+
+curl http://localhost:8080/api/jobs/b4f43279-...
+# 200 {"id":"b4f43279-...","type":"send-email","status":"PENDING"}
 ```
 
 ---
 
-## API endpoints
+## API
 
-| Method | Endpoint | Auth | Description |
-|---|---|---|---|
-| POST | `/api/auth/register` | Public | Create a new user (no token returned — user must log in separately) |
-| POST | `/api/auth/login` | Public | Returns access token (15 min) + refresh token (7 days) |
-| POST | `/api/auth/refresh` | Public | Exchange refresh token for new access + refresh (token rotation) |
-| POST | `/api/auth/logout` | Bearer | Invalidate refresh token in Redis |
-| GET | `/api/users/me` | Bearer | Get current authenticated user |
-| GET | `/actuator/health` | Public | Service health check |
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `POST` | `/api/jobs` | Create a job. Returns 201 with the job ID, status `PENDING` |
+| `GET` | `/api/jobs/{id}` | Get a job's current status. 404 if it doesn't exist |
+| `GET` | `/api/health` | Health check |
+| `GET` | `/actuator/health` | Actuator health |
 
-Auth header format: `Authorization: Bearer <access_token>`
+Two endpoints. No `PUT`, no `DELETE`. That's not laziness, see below.
 
 ---
 
-## Project structure
+## Testing
 
-Feature-based, not layer-based. Each feature owns its controller, service, DTOs, and entities. This scales better than the old `controller/`, `service/`, `repository/` layout — when you delete a feature, you delete one folder, not surgery across six.
+```bash
+./mvnw test
+```
 
-```
-src/main/java/com/boilerplate/saas/
-├── auth/                    # Authentication feature
-│   ├── AuthController.java
-│   ├── AuthService.java
-│   ├── dto/                 # Request/response DTOs
-│   └── entity/
-├── user/                    # User management feature
-│   ├── UserController.java
-│   ├── UserService.java
-│   ├── UserRepository.java
-│   ├── dto/
-│   └── entity/
-├── security/                # Cross-cutting security primitives
-│   ├── JwtTokenProvider.java
-│   ├── JwtAuthenticationFilter.java
-│   ├── CustomUserDetailsService.java
-│   ├── RefreshTokenService.java
-│   └── SecurityConfig.java
-├── common/                  # Shared across features
-│   ├── audit/               # @CreatedDate, @LastModifiedDate
-│   ├── dto/                 # ApiErrorResponse (RFC 7807)
-│   └── exception/           # Global handler + custom exceptions
-├── config/                  # Global beans (Redis, Jackson, OpenAPI)
-└── health/                  # Health check endpoint
-```
+| Type | Count | Time | What it answers |
+|------|-------|------|-----------------|
+| Unit (domain + application) | 11 | 0.14s | Are my rules correct? |
+| Integration (Testcontainers) | 4 | 21s | Are the pieces wired correctly? |
+
+A 150x difference, and that's exactly why the pyramid has a wide base. If every rule needed a real Postgres, the suite would take minutes and nobody would run it.
+
+The integration tests start a real PostgreSQL container through Testcontainers, so there's no manual `docker compose up` and CI behaves the same as my laptop. Not H2: it doesn't faithfully emulate Postgres's UUID type, indexes or SQL dialect, and "passed in tests, exploded in prod" starts right there.
 
 ---
 
 ## Why these decisions?
 
-This is the section I wish more boilerplates had. Here's the reasoning behind the non-obvious choices.
+This is the section I wish more repos had. Full reasoning lives in [`docs/adr/`](docs/adr/).
 
-### Why JWT + opaque refresh tokens (not just JWT)?
+### Why a repository port instead of just using `JpaRepository`?
 
-JWTs can't be revoked once issued — only expired. That's fine for short-lived access tokens (15 min) but dangerous for long sessions. So:
+Not so I can swap Postgres for MongoDB. Nobody does that, and saying it in an interview should earn you a raised eyebrow.
 
-- **Access token** = JWT, 15 min, stateless, fast
-- **Refresh token** = opaque UUID, 7 days, stored in Redis, **revocable**
+The real reason is testing. `CreateJobService` has to save something. If it depends on Spring Data directly, testing it needs a real database: Docker, Testcontainers, several seconds, for every test. If it depends on `JobRepository` — an interface I own — I hand it a `HashMap`-backed fake and the test runs in a millisecond.
 
-When you log out, we delete the refresh token from Redis. Even if someone steals the JWT, they only have 15 minutes to use it.
+The second reason: `JpaRepository` is Spring's interface, not mine. Extend it and you inherit its whole world — `flush()`, lazy loading, detached entities, `LazyInitializationException`. My port has two methods and speaks in domain objects.
 
-### Why rotate refresh tokens on every use?
+### Why is `JobEntity` a separate class from `Job`?
 
-Refresh token rotation makes stolen tokens self-destruct. Here's the scenario:
-- Attacker steals refresh token `ABC` from victim
-- Attacker uses it first → gets new token `XYZ`, `ABC` is deleted
-- Victim later tries to use `ABC` → fails, they're logged out
-- Victim notices, changes password, attacker's `XYZ` becomes useless
+Because JPA's requirements would destroy the domain's guarantees. JPA needs a no-arg constructor, but `Job`'s constructor is exactly where "a new job is always PENDING" is enforced. JPA needs setters, but `Job` deliberately has none, because status only moves through `start()`, `markDone()` and `markFailed()`.
 
-A stolen token gives you one shot, not a 7-day free pass.
+Merge them and you strip every protection to keep Hibernate happy. Kept apart, `JobEntity` obeys JPA and `Job` obeys the business. An adapter translates between them.
 
-### Why Redis for refresh tokens, not the database?
+### Why no `PUT /jobs/{id}` or `DELETE`?
 
-Refresh tokens are short-lived, write-heavy, and need automatic expiration. Redis gives you all three with a single `SET key value EX 604800` command. PostgreSQL would work, but you'd need a scheduled job to clean up expired rows. Redis just forgets them.
+This is the one I'd defend hardest.
 
-### Why Flyway over Hibernate's `ddl-auto`?
+If I exposed `updateJob(status)`, a client could do this:
 
-`ddl-auto=update` is a footgun in production. It silently drops columns, renames tables, and makes "what's the schema?" an unanswerable question. Flyway forces every change into a versioned SQL file. Boring, explicit, safe.
+```json
+PUT /api/jobs/abc-123
+{ "status": "DONE" }
+```
 
-`hibernate.ddl-auto` is set to `validate` here — Hibernate only checks that the schema matches the entities, never modifies it.
+A PENDING job, marked done, having never run. Every state rule I wrote and every test protecting them, bypassed in one request.
 
-### Why feature-based packages?
+Status isn't a field you set. It's the consequence of something happening. The user creates a job and reads it; the system advances it through the domain rules.
 
-When you fix a bug in user signup, you touch `AuthController`, `AuthService`, `RegisterRequest`, `User`, `UserRepository`. In layer-based packaging, those are scattered across five directories. In feature-based, they're in two folders next to each other.
+And `DELETE`? A job is a record — "this ran last Tuesday and failed". You don't delete history.
 
-It also makes deletion safe — delete the `auth/` folder, the auth feature is gone. Try doing that in a layer-based project.
+This is the difference between CRUD thinking ("I have a table, so I need four operations") and use-case thinking ("what can a user actually do here?"). The answer is two things, so there are two endpoints.
 
-### Why stateless sessions?
+### Why return a DTO instead of the entity?
 
-Once you have JWT, sessions become redundant. They cost server memory and break horizontal scaling (sticky sessions, anyone?). `SessionCreationPolicy.STATELESS` tells Spring "don't bother — every request brings its own identity."
+Return `JobEntity` and your database schema quietly becomes your API contract. Add a column, break every client. `JobResponse` makes the contract explicit: what's written there is what ships.
 
-### Why CSRF disabled?
+### Why is the state machine inside `Job` and not its own class?
 
-CSRF attacks rely on cookies being sent automatically by the browser. JWTs live in the `Authorization` header, which is **not** sent automatically — a malicious site can't trigger an authenticated request. CSRF protection on a JWT API does nothing useful and breaks all your POST endpoints.
+Four states and an almost-linear flow. A dedicated `JobStateMachine` would be over-engineering today, and moving the rules out later is a small refactor if the states multiply. Start simple where changing your mind is cheap. The full reasoning, and the trigger for revisiting it, is in [ADR 0001](docs/adr/0001-durum-yonetimi.md).
 
-### Why constructor injection?
+### Why no `@Service` on the use cases?
 
-Field injection (`@Autowired private SomeService x`) hides dependencies and breaks final fields. Constructor injection forces every dependency to be explicit, supports `final`, and works without Spring (great for testing).
+So `application/` stays framework-free. `JobBeanConfig` registers them as beans instead. It costs one extra class and buys a layer with zero Spring imports, plus a single visible place where wiring happens.
 
-### Why RFC 7807 Problem Details?
+### Why `VARCHAR` for status instead of an ordinal?
 
-Returning errors as `{ "timestamp": ..., "status": 400, "errors": [...] }` is standardized in RFC 7807. Frontends and API clients can rely on a predictable shape across every endpoint and every project. The `GlobalExceptionHandler` enforces this format.
+Store `0` and the day someone reorders the enum, every historical row silently means something else. `PENDING` is readable in `psql` and doesn't rot.
 
 ---
 
-## Testing the auth flow with Postman
+## Roadmap
 
-1. **Register** — `POST /api/auth/register` with `{ "firstName": "...", "lastName": "...", "email": "...", "password": "..." }` → 201 Created
-2. **Login** — `POST /api/auth/login` → returns `accessToken` + `refreshToken`
-3. **Protected request** — `GET /api/users/me` with `Authorization: Bearer <accessToken>` → 200 OK
-4. **Refresh** — `POST /api/auth/refresh` with `{ "refreshToken": "..." }` → new tokens (old one is now invalid — try it again, you'll get 403)
-5. **Logout** — `POST /api/auth/logout` with `{ "refreshToken": "..." }` and the Bearer header → refresh token deleted from Redis
+**Phase 1 — Clean architecture. Done.**
+Synchronous, single service. Hexagonal layers, Postgres and Flyway, unit and integration tests, Docker Compose.
+
+**Phase 2 — Scalability.**
+Redis caching, rate limiting, load testing with k6, metrics. The deliverable isn't "I added a cache", it's a measured before/after p95 latency table.
+
+**Phase 3 — Distributed and event-driven.**
+Split the worker out and put a queue (SQS) between them. Dead-letter queue, retry with exponential backoff, idempotency, eventual consistency. This is where Phase 1's synchronous design gets deliberately broken and replaced.
 
 ---
 
-## What's not included (yet)
+## Not included yet
 
-This is a starter, not a finished product. Things I'll add as I need them:
+Being honest about the gaps:
 
-- [ ] Email verification flow
-- [ ] Password reset
-- [ ] Rate limiting (per-IP and per-user)
-- [ ] OAuth2 / social login
-- [ ] Access token blacklist on logout (right now, access tokens stay valid until they expire — 15 min max)
-- [ ] Integration tests for the auth flow
-- [ ] API versioning (`/api/v1/...`)
-
-If you're using this and one of these is blocking you, open an issue or PR.
+- **Job execution.** The state transitions exist and are tested, but nothing calls them yet, so jobs currently stay `PENDING`. The executor is the next thing I'm building.
+- Authentication. Deliberately stripped — Phase 1 is about architecture, and auth would have been scope creep.
+- Metrics, caching, rate limiting. Phase 2.
+- The queue, workers, retries, DLQ. Phase 3.
 
 ---
 
 ## License
 
-MIT. Use it, fork it, ship products with it. Attribution appreciated but not required.
-
----
+MIT.
 
 ## About
 
-Built by [Erdem Sidal](https://github.com/erdemsidal) as the foundation for SaaS products I'm building.
-
-If this saves you time, a ⭐ on the repo would mean a lot.
+Built by Erdem Sidal as a study in async job-processing architecture, and in being able to explain it.
