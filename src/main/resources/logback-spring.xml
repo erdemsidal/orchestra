@@ -34,15 +34,8 @@
             </encoder>
         </appender>
 
-        <!-- Sentry Appender — ERROR ve üzeri Sentry'ye gider -->
-        <appender name="SENTRY" class="io.sentry.logback.SentryAppender">
-            <minimumEventLevel>ERROR</minimumEventLevel>
-            <minimumBreadcrumbLevel>INFO</minimumBreadcrumbLevel>
-        </appender>
-
         <root level="INFO">
             <appender-ref ref="JSON_CONSOLE"/>
-            <appender-ref ref="SENTRY"/>
         </root>
     </springProfile>
 </configuration>

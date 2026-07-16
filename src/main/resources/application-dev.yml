@@ -17,8 +17,7 @@ spring:
 logging:
   level:
     root: INFO
-    com.boilerplate.saas: DEBUG
-    org.springframework.security: DEBUG
+    com.orchestra: DEBUG
     org.hibernate.SQL: DEBUG
     org.hibernate.type.descriptor.sql.BasicBinder: TRACE
 

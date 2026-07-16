@@ -15,8 +15,7 @@ spring:
 logging:
   level:
     root: WARN
-    com.boilerplate.saas: INFO
-    org.springframework.security: WARN
+    com.orchestra: INFO
 
 # Swagger kapalı — production'da API docs expose etme
 springdoc:
@@ -24,7 +23,3 @@ springdoc:
     enabled: false
   swagger-ui:
     enabled: false
-
-# Sentry production'da tam performans
-sentry:
-  traces-sample-rate: 0.2   # Production'da %20 sampling yeterli
