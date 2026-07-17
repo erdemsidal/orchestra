@@ -1,0 +1,74 @@
+package com.orchestra.job.application;
+
+import java.util.UUID;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Test;
+
+import com.orchestra.job.domain.Job;
+import com.orchestra.job.domain.JobNotFoundException;
+import com.orchestra.job.domain.JobStatus;
+
+/**
+ * ExecuteJobService'in BİRİM testleri — yine DB'siz, gerçek runner olmadan.
+ *
+ * JobTaskRunner tek metotlu bir arayüz olduğu için sahtesini LAMBDA ile
+ * yazabiliyoruz:
+ *   job -> { }                    -> hiçbir şey yapmaz = başarı
+ *   job -> { throw new ... }      -> patlar = başarısızlık
+ * Böylece "iş başarılı olursa" ve "iş patlarsa" senaryolarını, gerçekten
+ * bir şey çalıştırmadan, Thread.sleep beklemeden, kesin kontrol altında test ederiz.
+ */
+class ExecuteJobServiceTest {
+
+    @Test
+    @DisplayName("execute() başarılı işi DONE yapar")
+    void execute_basariliIs_doneYapar() {
+        // GIVEN — repoda PENDING bir iş ve HİÇ patlamayan bir runner
+        FakeJobRepository repo = new FakeJobRepository();
+        Job job = new Job(UUID.randomUUID(), "email-gonder");
+        repo.save(job);
+        JobTaskRunner basariliRunner = j -> { /* başarı: sessizce döner */ };
+        ExecuteJobService service = new ExecuteJobService(repo, basariliRunner);
+
+        // WHEN
+        Job sonuc = service.execute(job.getId());
+
+        // THEN — iş DONE olmalı ve bu durum repoya da yazılmış olmalı
+        assertThat(sonuc.getStatus()).isEqualTo(JobStatus.DONE);
+        assertThat(repo.findById(job.getId()).orElseThrow().getStatus())
+                .isEqualTo(JobStatus.DONE);
+    }
+
+    @Test
+    @DisplayName("execute() olmayan iş için JobNotFoundException fırlatır")
+    void execute_olmayanIs_istisnaFirlatir() {
+        // GIVEN — boş repo, runner'ın önemi yok
+        ExecuteJobService service = new ExecuteJobService(new FakeJobRepository(), j -> { });
+
+        // WHEN + THEN
+        assertThatThrownBy(() -> service.execute(UUID.randomUUID()))
+                .isInstanceOf(JobNotFoundException.class);
+    }
+
+    @Test
+    @DisplayName("execute() başarısız işi FAILED yapar (istisna fırlatmadan)")
+    void execute_basarisizIs_failedYapar() {
+        // GIVEN — repoda PENDING bir iş ve HER ZAMAN patlayan bir runner
+        FakeJobRepository repo = new FakeJobRepository();
+        Job job = new Job(UUID.randomUUID(), "email-gonder");
+        repo.save(job);
+        JobTaskRunner patlayanRunner = j -> { throw new RuntimeException("patladı"); };
+        ExecuteJobService service = new ExecuteJobService(repo, patlayanRunner);
+
+        // WHEN — executor istisnayı yakalar, yukarı fırlatmaz
+        Job sonuc = service.execute(job.getId());
+
+        // THEN — iş FAILED olmalı, hem dönen sonuçta hem repoda
+        assertThat(sonuc.getStatus()).isEqualTo(JobStatus.FAILED);
+        assertThat(repo.findById(job.getId()).orElseThrow().getStatus())
+                .isEqualTo(JobStatus.FAILED);
+    }
+}

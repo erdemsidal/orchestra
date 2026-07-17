@@ -1,8 +1,10 @@
 package com.orchestra.job.infrastructure;
 
 import com.orchestra.job.application.CreateJobService;
+import com.orchestra.job.application.ExecuteJobService;
 import com.orchestra.job.application.GetJobService;
 import com.orchestra.job.application.JobRepository;
+import com.orchestra.job.application.JobTaskRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -35,5 +37,13 @@ public class JobBeanConfig {
     @Bean
     public GetJobService getJobService(JobRepository jobRepository) {
         return new GetJobService(jobRepository);
+    }
+
+    // JobTaskRunner'ı Spring, SimulatedJobTaskRunner'dan (@Component) buluyor —
+    // tıpkı JobRepository'yi JpaJobRepositoryAdapter'dan bulduğu gibi.
+    @Bean
+    public ExecuteJobService executeJobService(JobRepository jobRepository,
+                                               JobTaskRunner jobTaskRunner) {
+        return new ExecuteJobService(jobRepository, jobTaskRunner);
     }
 }

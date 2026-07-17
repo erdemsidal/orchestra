@@ -43,7 +43,18 @@ import static org.assertj.core.api.Assertions.assertThat;
  * H2, Postgres'in UUID tipini, indekslerini, SQL lehçesini birebir taklit etmez;
  * "testte geçti, prod'da patladı" klasiği oradan çıkar.
  */
-@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
+// Simüle runner'ın rastgeleliğini testte KAPATIYORUZ: hata oranı 0, bekleme 0.
+// Neden? Entegrasyon testi deterministik olmalı. Gerçek runner %30 ihtimalle
+// patlıyor ve rastgele süre bekliyor; bunu açık bırakırsak test bazen geçer
+// bazen kalır (flaky test) ve hızı da düşer. Bu ayarlarla iş her zaman anında
+// başarılı olur, biz de create+execute+kaydet+oku zincirini kararlı test ederiz.
+@SpringBootTest(
+        webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
+        properties = {
+                "app.job.simulated.failure-rate=0",
+                "app.job.simulated.min-ms=0",
+                "app.job.simulated.max-ms=0"
+        })
 @Testcontainers
 class JobApiIntegrationTest {
 
@@ -55,18 +66,18 @@ class JobApiIntegrationTest {
     private TestRestTemplate restTemplate;
 
     @Test
-    @DisplayName("POST /api/jobs işi oluşturur ve gerçek veritabanına kaydeder")
-    void postJobs_isiOlusturur() {
+    @DisplayName("POST /api/jobs işi oluşturur, senkron çalıştırır ve DONE döner")
+    void postJobs_isiOlusturupCalistirir() {
         // WHEN — gerçek HTTP isteği (Tomcat çalışıyor)
         ResponseEntity<JobResponse> response = restTemplate.postForEntity(
                 "/api/jobs",
                 new CreateJobRequest("email-gonder"),
                 JobResponse.class);
 
-        // THEN — 201 Created ve iş PENDING
+        // THEN — 201 Created ve iş DONE (senkron çalıştı; hata oranı 0'a sabitli)
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(JobStatus.PENDING);
+        assertThat(response.getBody().status()).isEqualTo(JobStatus.DONE);
         assertThat(response.getBody().type()).isEqualTo("email-gonder");
         assertThat(response.getBody().id()).isNotNull();
     }

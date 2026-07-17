@@ -1,6 +1,7 @@
 package com.orchestra.job.infrastructure.web;
 
 import com.orchestra.job.application.CreateJobService;
+import com.orchestra.job.application.ExecuteJobService;
 import com.orchestra.job.application.GetJobService;
 import com.orchestra.job.domain.Job;
 import io.swagger.v3.oas.annotations.Operation;
@@ -35,23 +36,34 @@ import java.util.UUID;
 public class JobController {
 
     private final CreateJobService createJobService;
+    private final ExecuteJobService executeJobService;
     private final GetJobService getJobService;
 
-    public JobController(CreateJobService createJobService, GetJobService getJobService) {
+    public JobController(CreateJobService createJobService,
+                         ExecuteJobService executeJobService,
+                         GetJobService getJobService) {
         this.createJobService = createJobService;
+        this.executeJobService = executeJobService;
         this.getJobService = getJobService;
     }
 
     /**
-     * Yeni iş oluşturur.
-     * 201 Created döner — "kaynak yaratıldı" demenin doğru HTTP yolu (200 değil).
+     * Yeni iş oluşturur ve SENKRON olarak çalıştırır.
+     *
+     * Faz 1 tercihi (bkz. yol haritası): işi isteğin İÇİNDE çalıştırıyoruz.
+     * Yani 5 saniyelik bir iş = 5 saniye bekleyen bir HTTP isteği, ve cevap
+     * zaten DONE/FAILED döner (kullanıcı PENDING'i göremez). Bu bilinçli bir
+     * "problem" — Faz 3'te araya kuyruk koyup create ve execute'i ayıracağız;
+     * o zaman istek anında dönecek, işi arka planda worker çalıştıracak.
      */
     @PostMapping
     @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Yeni iş oluştur", description = "İşi PENDING durumunda oluşturur ve jobId döner")
+    @Operation(summary = "Yeni iş oluştur ve çalıştır",
+            description = "İşi oluşturur, senkron çalıştırır ve son durumuyla (DONE/FAILED) döner")
     public JobResponse create(@Valid @RequestBody CreateJobRequest request) {
-        Job job = createJobService.create(request.type());
-        return JobResponse.from(job);
+        Job created = createJobService.create(request.type());
+        Job finished = executeJobService.execute(created.getId());
+        return JobResponse.from(finished);
     }
 
     /**
