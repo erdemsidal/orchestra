@@ -1,0 +1,29 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+          cache: maven
+
+      # Testcontainers, entegrasyon testi için gerçek bir Postgres konteyneri
+      # başlatıyor. GitHub'ın ubuntu runner'ında Docker zaten kurulu ve çalışıyor,
+      # yani ayrıca bir service container tanımlamaya gerek yok.
+      - name: Run tests
+        run: ./mvnw -B test

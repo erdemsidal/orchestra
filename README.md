@@ -75,6 +75,7 @@ Everything about jobs lives under `job/`. Package-by-feature, not `controller/` 
 | Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
 | Cache | Redis 7 | Wired but dormant, Phase 2 will use it |
 | Containers | Docker Compose | Postgres and Redis in one command |
+| CI | GitHub Actions | Runs the test suite on every push |
 
 ---
 
@@ -101,10 +102,12 @@ Try it:
 curl -X POST http://localhost:8080/api/jobs \
   -H "Content-Type: application/json" \
   -d '{"type":"send-email"}'
-# 201 {"id":"b4f43279-...","type":"send-email","status":"PENDING"}
+# 201 {"id":"b4f43279-...","type":"send-email","status":"DONE"}
+# The job runs synchronously inside the request (Phase 1), so the response
+# already reflects the final state — DONE, or FAILED if the work threw.
 
 curl http://localhost:8080/api/jobs/b4f43279-...
-# 200 {"id":"b4f43279-...","type":"send-email","status":"PENDING"}
+# 200 {"id":"b4f43279-...","type":"send-email","status":"DONE"}
 ```
 
 ---
@@ -113,7 +116,7 @@ curl http://localhost:8080/api/jobs/b4f43279-...
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/jobs` | Create a job. Returns 201 with the job ID, status `PENDING` |
+| `POST` | `/api/jobs` | Create a job and run it synchronously. Returns 201 with the job ID and its final status (`DONE` or `FAILED`) |
 | `GET` | `/api/jobs/{id}` | Get a job's current status. 404 if it doesn't exist |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/actuator/health` | Actuator health |
@@ -211,8 +214,6 @@ Split the worker out and put a queue (SQS) between them. Dead-letter queue, retr
 
 Being honest about the gaps:
 
-- **Job execution.** The state transitions exist and are tested, but nothing calls them yet, so jobs currently stay `PENDING`. The executor is the next thing I'm building.
-- **CI.** The boilerplate shipped a pipeline that also built and pushed Docker images and had an empty deploy stage — none of which this project needs. I took it out rather than maintain something I don't use. I'll add a pipeline that just runs the tests once the executor lands.
 - Authentication. Deliberately stripped — Phase 1 is about architecture, and auth would have been scope creep.
 - Metrics, caching, rate limiting. Phase 2.
 - The queue, workers, retries, DLQ. Phase 3.
