@@ -75,7 +75,6 @@ Everything about jobs lives under `job/`. Package-by-feature, not `controller/` 
 | Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
 | Cache | Redis 7 | Wired but dormant, Phase 2 will use it |
 | Containers | Docker Compose | Postgres and Redis in one command |
-| CI | GitHub Actions | Tests run on every push |
 
 ---
 
@@ -213,6 +212,7 @@ Split the worker out and put a queue (SQS) between them. Dead-letter queue, retr
 Being honest about the gaps:
 
 - **Job execution.** The state transitions exist and are tested, but nothing calls them yet, so jobs currently stay `PENDING`. The executor is the next thing I'm building.
+- **CI.** The boilerplate shipped a pipeline that also built and pushed Docker images and had an empty deploy stage — none of which this project needs. I took it out rather than maintain something I don't use. I'll add a pipeline that just runs the tests once the executor lands.
 - Authentication. Deliberately stripped — Phase 1 is about architecture, and auth would have been scope creep.
 - Metrics, caching, rate limiting. Phase 2.
 - The queue, workers, retries, DLQ. Phase 3.
