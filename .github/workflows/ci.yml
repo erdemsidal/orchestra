@@ -22,8 +22,24 @@ jobs:
           distribution: 'temurin'
           cache: maven
 
-      # Testcontainers, entegrasyon testi için gerçek bir Postgres konteyneri
-      # başlatıyor. GitHub'ın ubuntu runner'ında Docker zaten kurulu ve çalışıyor,
-      # yani ayrıca bir service container tanımlamaya gerek yok.
+      # GEÇİCİ TEŞHİS: runner'ın Docker API sürümünü annotation olarak yaz.
+      - name: Docker info
+        run: |
+          echo "::warning::Docker $(docker version --format 'Server API={{.Server.APIVersion}} Min={{.Server.MinAPIVersion}}')"
+
       - name: Run tests
         run: ./mvnw -B test
+
+      # GEÇİCİ TEŞHİS: test kaldıysa surefire raporlarındaki hata satırlarını
+      # annotation olarak yüzeye çıkar (log 403 verdiği için tek okuyabildiğim yol bu).
+      - name: Hata detayı
+        if: failure()
+        run: |
+          for f in target/surefire-reports/*.txt; do
+            echo "::group::$f"
+            cat "$f"
+            echo "::endgroup::"
+            grep -aE "FAIL|ERROR|Exception|Caused by|Could not|Docker|<<<" "$f" | head -15 | while IFS= read -r l; do
+              echo "::error::$l"
+            done
+          done
