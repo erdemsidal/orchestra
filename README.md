@@ -75,7 +75,7 @@ Everything about jobs lives under `job/`. Package-by-feature, not `controller/` 
 | Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
 | Cache | Redis 7 | Wired but dormant, Phase 2 will use it |
 | Containers | Docker Compose | Postgres and Redis in one command |
-| CI | GitHub Actions | Runs the test suite on every push |
+| CI | GitHub Actions | Runs the unit tests on every push |
 
 ---
 
@@ -214,6 +214,7 @@ Split the worker out and put a queue (SQS) between them. Dead-letter queue, retr
 
 Being honest about the gaps:
 
+- **Integration tests in CI.** They run locally (they need Docker for Testcontainers). CI currently runs only the unit tests; wiring Testcontainers into the pipeline is a later task.
 - Authentication. Deliberately stripped — Phase 1 is about architecture, and auth would have been scope creep.
 - Metrics, caching, rate limiting. Phase 2.
 - The queue, workers, retries, DLQ. Phase 3.

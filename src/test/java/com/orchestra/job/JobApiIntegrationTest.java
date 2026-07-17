@@ -4,6 +4,7 @@ import com.orchestra.job.infrastructure.web.CreateJobRequest;
 import com.orchestra.job.infrastructure.web.JobResponse;
 import com.orchestra.job.domain.JobStatus;
 import org.junit.jupiter.api.DisplayName;
+import org.junit.jupiter.api.Tag;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -56,6 +57,7 @@ import static org.assertj.core.api.Assertions.assertThat;
                 "app.job.simulated.max-ms=0"
         })
 @Testcontainers
+@Tag("integration")   // Docker gerektirir; CI'da "integration" grubu şimdilik hariç tutuluyor
 class JobApiIntegrationTest {
 
     @Container
