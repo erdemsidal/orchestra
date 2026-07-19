@@ -57,6 +57,14 @@
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
+        <!-- Metrikleri Prometheus formatında /actuator/prometheus'tan verir.
+             Percentile histogramlarını ve (ileride) Grafana'yı besler. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
         <!-- ═══════════════════════════════════════════════ -->
         <!-- DATABASE                                       -->
         <!-- ═══════════════════════════════════════════════ -->
