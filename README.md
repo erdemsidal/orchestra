@@ -73,7 +73,8 @@ Everything about jobs lives under `job/`. Package-by-feature, not `controller/` 
 | Build | Maven (wrapper) | `./mvnw` works anywhere, no global install |
 | API docs | springdoc-openapi | Swagger UI at `/swagger-ui.html` |
 | Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
-| Cache | Redis 7 | Wired but dormant, Phase 2 will use it |
+| Cache | Redis 7 | Caches `GET /jobs/{id}` (Phase 2) |
+| Rate limiting | Bucket4j | Token bucket, per-IP, on `POST /jobs` (Phase 2) |
 | Containers | Docker Compose | Postgres and Redis in one command |
 
 ---
@@ -167,6 +168,20 @@ invalidation becomes a real problem.
 
 Reproduce it: `docker compose up -d && ./mvnw spring-boot:run`, then
 `k6 run load-tests/get-job.js` (comment out the `@Cacheable` for the baseline).
+
+## Rate limiting
+
+`POST /jobs` runs work synchronously, so an abusive client could hammer it and
+starve the system. A servlet filter enforces a **token bucket** (Bucket4j) per
+client IP — 20 requests/second with a burst of 20 — before the request ever
+reaches the controller. Over the limit gets `429 Too Many Requests` with a
+`Retry-After` header. Measured: 100 concurrent POSTs → 61 through, 39 rejected.
+
+Token bucket allows short bursts (up to the bucket capacity) but caps the
+sustained rate at the refill rate — which is what you actually want, since real
+users click in bursts. Reasoning, plus the honest limitations (per-IP is crude
+behind NAT; in-memory buckets don't span multiple instances), in
+[ADR 0005](docs/adr/0005-rate-limiting.md).
 
 ## Why these decisions?
 

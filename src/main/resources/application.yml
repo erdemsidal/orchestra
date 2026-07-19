@@ -83,6 +83,15 @@ management:
         "[http.server.requests]": 0.5, 0.95, 0.99
 
 # ═══════════════════════════════════════════════════════════
+# Rate limiting (token bucket) — POST /api/jobs için, IP başına
+# ═══════════════════════════════════════════════════════════
+app:
+  rate-limit:
+    capacity: 20            # kova en fazla 20 jeton tutar (burst sınırı)
+    refill-tokens: 20       # her periyotta eklenen jeton
+    refill-period-seconds: 1  # periyot: 1 saniye -> yani ~20 istek/saniye
+
+# ═══════════════════════════════════════════════════════════
 # Server
 # ═══════════════════════════════════════════════════════════
 server:
