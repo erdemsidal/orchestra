@@ -141,6 +141,33 @@ The integration tests start a real PostgreSQL container through Testcontainers, 
 
 ---
 
+## Performance: caching `GET /jobs/{id}`
+
+Phase 2 rule: measure, change, measure again. Same k6 test both times — 50 virtual
+users hammering `GET /jobs/{id}` for 30s. The only change between the two columns
+is a `@Cacheable` annotation backed by Redis (5-minute TTL).
+
+| Metric | No cache | With cache | Change |
+|--------|----------|------------|--------|
+| p50 | 11.74ms | 3.90ms | −67% |
+| p95 | 19.51ms | 6.63ms | −66% (≈3× faster) |
+| p99 | 29.19ms | 10.96ms | −62% |
+| Throughput | 3,867 req/s | 11,192 req/s | ≈2.9× |
+
+The endpoint is a single indexed primary-key read, so in isolation it's already
+fast (~5ms). The win shows up **under load**: without the cache, concurrent
+requests queue for one of Hikari's 20 DB connections and p95 climbs; the cache
+serves them from Redis with no pool contention.
+
+No cache invalidation is needed here, and that's deliberate — see
+[ADR 0004](docs/adr/0004-cache-stratejisi.md). Because POST runs synchronously, a
+job is already terminal (`DONE`/`FAILED`) by the time it can be fetched, so the
+cached value never goes stale. Phase 3 makes jobs async — and that's exactly when
+invalidation becomes a real problem.
+
+Reproduce it: `docker compose up -d && ./mvnw spring-boot:run`, then
+`k6 run load-tests/get-job.js` (comment out the `@Cacheable` for the baseline).
+
 ## Why these decisions?
 
 This is the section I wish more repos had. Full reasoning lives in [`docs/adr/`](docs/adr/).

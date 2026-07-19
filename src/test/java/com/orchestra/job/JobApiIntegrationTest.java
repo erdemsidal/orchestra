@@ -54,7 +54,12 @@ import static org.assertj.core.api.Assertions.assertThat;
         properties = {
                 "app.job.simulated.failure-rate=0",
                 "app.job.simulated.min-ms=0",
-                "app.job.simulated.max-ms=0"
+                "app.job.simulated.max-ms=0",
+                // Bu test yalnızca Postgres'i (Testcontainers) kaldırıyor, Redis'i değil.
+                // @Cacheable eklendiği için cache açık kalsa test Redis'e bağlanmaya
+                // çalışır ve gizli bir bağımlılık doğar. Cache'i kapatıyoruz — bu testin
+                // derdi "katmanlar doğru bağlanmış mı", cache performansı değil.
+                "spring.cache.type=none"
         })
 @Testcontainers
 @Tag("integration")   // Docker gerektirir; CI'da "integration" grubu şimdilik hariç tutuluyor

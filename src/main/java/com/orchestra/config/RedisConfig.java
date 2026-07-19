@@ -33,8 +33,11 @@ public class RedisConfig {
                         .fromSerializer(new GenericJackson2JsonRedisSerializer()));
 
         // ── Cache bölgeleri ve TTL'leri ──────────────────
-        // Faz 2'de "jobs" gibi bölgeleri buraya kendi TTL'leriyle ekleyeceğiz.
         Map<String, RedisCacheConfiguration> cacheConfigurations = new HashMap<>();
+        // "jobs" bölgesi: GET /jobs/{id} cevaplarını 5 dakika tut.
+        // Neden 5 dk? Cache'lediğimiz iş terminal (değişmez), yani bayat veri riski
+        // yok; TTL burada sadece belleği sınırlamak için (sonsuza kadar tutma).
+        cacheConfigurations.put("jobs", defaultConfig.entryTtl(Duration.ofMinutes(5)));
 
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultConfig)

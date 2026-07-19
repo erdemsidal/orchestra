@@ -7,6 +7,7 @@ import com.orchestra.job.domain.Job;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
+import org.springframework.cache.annotation.Cacheable;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -70,7 +71,13 @@ public class JobController {
      * İşin durumunu sorgular.
      * İş yoksa GetJobService JobNotFoundException fırlatır ->
      * GlobalExceptionHandler bunu 404'e çevirir.
+     *
+     * @Cacheable: bu metodun sonucunu "jobs" cache bölgesine, anahtar olarak id ile
+     * yazar. İkinci kez aynı id gelirse metot HİÇ çalışmaz — Spring cevabı doğrudan
+     * Redis'ten döner, DB'ye gidilmez. Cache invalidation'a gerek yok çünkü
+     * cache'lediğimiz iş terminal (değişmez); TTL (5 dk) emniyet kemeri. (Bkz. ADR 0004.)
      */
+    @Cacheable(cacheNames = "jobs", key = "#id")
     @GetMapping("/{id}")
     @Operation(summary = "İş durumunu sorgula", description = "jobId ile işin güncel durumunu döner")
     public JobResponse getById(@PathVariable UUID id) {
