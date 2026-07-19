@@ -39,6 +39,27 @@ services:
       retries: 5
 
   # ═══════════════════════════════════════════
+  # LocalStack — AWS'i lokalde taklit eder (biz sadece SQS kullanıyoruz)
+  # ═══════════════════════════════════════════
+  localstack:
+    image: localstack/localstack:3
+    container_name: orchestra-localstack
+    restart: unless-stopped
+    ports:
+      - "4566:4566"          # LocalStack'in tek "edge" portu; tüm AWS servisleri buradan
+    environment:
+      SERVICES: sqs          # sadece SQS'i başlat (hızlı, hafif)
+      DEBUG: "0"
+    volumes:
+      # Açılışta kuyruğu oluşturan init script'i buraya mount ediyoruz.
+      - "./localstack/init:/etc/localstack/init/ready.d"
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal sqs list-queues || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ═══════════════════════════════════════════
   # Spring Boot App (opsiyonel — local dev'de
   # genelde sadece postgres + redis çalıştırıp
   # uygulamayı IDE'den çalıştırırsın)
