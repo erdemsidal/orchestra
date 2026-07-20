@@ -17,5 +17,13 @@ public enum JobStatus {
     PENDING,
     RUNNING,
     DONE,
-    FAILED
+    FAILED;
+
+    /**
+     * Terminal mi? (DONE/FAILED) Terminal durum bir daha değişmez — bu yüzden
+     * güvenle cache'lenebilir. PENDING/RUNNING değişkendir, cache'lenmemeli.
+     */
+    public boolean isTerminal() {
+        return this == DONE || this == FAILED;
+    }
 }

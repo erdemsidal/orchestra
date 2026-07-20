@@ -45,6 +45,19 @@ cache'lemek bayat-veri riski taşımaz. TTL sadece belleği sınırlayan emniyet
   esnetir. Kabul edilebilir, çünkü cache'lenen şey HTTP cevabının ta kendisi.
 - **Ne zaman değişir (kritik):** Faz 3'te iş async olacak; kullanıcı işi
   PENDING/RUNNING (yani DEĞİŞKEN) haldeyken GET'leyecek. O an "değişmez veri"
-  varsayımı çöker ve gerçek cache invalidation gerekir: iş durumu her
-  değiştiğinde (`save`) ilgili cache girdisini `@CacheEvict`/`@CachePut` ile
-  güncellemek zorunda kalacağım. Bu ADR o noktada yeniden yazılacak.
+  varsayımı çöker. Bu ADR o noktada güncellenecek. ↓
+
+## Güncelleme (Faz 3, 2026-07-20): öngörü gerçekleşti
+
+İş async olunca beklenen bayatlama yaşandı: bir işi RUNNING'ken GET'leyince
+RUNNING cache'lendi; worker DONE yaptıktan sonra API TTL boyunca hâlâ RUNNING
+gösterdi (Redis'te bayat kayıt). Bunu canlı gözlemledik.
+
+**Çözüm — @CacheEvict DEĞİL, "sadece terminali cache'le":** `@Cacheable`'a
+`unless = "!#result.status.terminal"` ekledik. Artık yalnızca DONE/FAILED
+(değişmez) cache'leniyor; PENDING/RUNNING her seferinde DB'den taze okunuyor.
+Böylece bayatlama imkânsız ve hâlâ cache invalidation'a (evict/put) gerek yok —
+çünkü cache'e giren her şey tanımı gereği değişmez. `JobStatus.isTerminal()`
+eklendi. Ödenen bedel: değişken durumlar cache'lenmediği için sürekli PENDING
+sorgulanan işlerde cache faydası yok — ama zaten değişen bir şeyi cache'lemek
+yanlış olurdu.

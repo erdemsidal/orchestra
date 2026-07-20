@@ -71,12 +71,16 @@ public class JobController {
      * İş yoksa GetJobService JobNotFoundException fırlatır ->
      * GlobalExceptionHandler bunu 404'e çevirir.
      *
-     * @Cacheable: bu metodun sonucunu "jobs" cache bölgesine, anahtar olarak id ile
-     * yazar. İkinci kez aynı id gelirse metot HİÇ çalışmaz — Spring cevabı doğrudan
-     * Redis'ten döner, DB'ye gidilmez. Cache invalidation'a gerek yok çünkü
-     * cache'lediğimiz iş terminal (değişmez); TTL (5 dk) emniyet kemeri. (Bkz. ADR 0004.)
+     * @Cacheable: sonucu "jobs" bölgesine id anahtarıyla yazar; ikinci kez aynı id
+     * gelirse metot çalışmaz, cevap Redis'ten gelir.
+     *
+     * unless = "sadece TERMINAL işleri cache'le": iş async çalıştığı için (Faz 3)
+     * GET'lendiğinde PENDING/RUNNING olabilir — bunlar değişkendir, cache'lersek
+     * bayatlar (worker DONE yapınca API hâlâ RUNNING gösterirdi). Bu yüzden sadece
+     * DONE/FAILED (değişmez) cache'leniyor; PENDING/RUNNING her seferinde DB'den
+     * taze okunuyor. Böylece cache invalidation'a hâlâ gerek yok. (Bkz. ADR 0004.)
      */
-    @Cacheable(cacheNames = "jobs", key = "#id")
+    @Cacheable(cacheNames = "jobs", key = "#id", unless = "!#result.status.terminal")
     @GetMapping("/{id}")
     @Operation(summary = "İş durumunu sorgula", description = "jobId ile işin güncel durumunu döner")
     public JobResponse getById(@PathVariable UUID id) {
