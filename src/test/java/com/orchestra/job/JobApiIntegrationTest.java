@@ -54,7 +54,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 //    gerçek SQS entegrasyonu değil.
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = "spring.cache.type=none")
+        properties = {
+                "spring.cache.type=none",
+                // Worker'ın @SqsListener'ı testte SQS'e (LocalStack) bağlanmaya
+                // çalışmasın; JobQueue zaten sahte. SQS'i tümden kapatıyoruz.
+                "spring.cloud.aws.sqs.enabled=false"
+        })
 @Testcontainers
 @Tag("integration")   // Docker gerektirir; CI'da "integration" grubu şimdilik hariç tutuluyor
 class JobApiIntegrationTest {
