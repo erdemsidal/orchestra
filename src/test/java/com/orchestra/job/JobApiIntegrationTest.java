@@ -1,5 +1,6 @@
 package com.orchestra.job;
 
+import com.orchestra.job.application.JobQueue;
 import com.orchestra.job.infrastructure.web.CreateJobRequest;
 import com.orchestra.job.infrastructure.web.JobResponse;
 import com.orchestra.job.domain.JobStatus;
@@ -12,6 +13,7 @@ import org.springframework.boot.test.web.client.TestRestTemplate;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
@@ -44,23 +46,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  * H2, Postgres'in UUID tipini, indekslerini, SQL lehçesini birebir taklit etmez;
  * "testte geçti, prod'da patladı" klasiği oradan çıkar.
  */
-// Simüle runner'ın rastgeleliğini testte KAPATIYORUZ: hata oranı 0, bekleme 0.
-// Neden? Entegrasyon testi deterministik olmalı. Gerçek runner %30 ihtimalle
-// patlıyor ve rastgele süre bekliyor; bunu açık bırakırsak test bazen geçer
-// bazen kalır (flaky test) ve hızı da düşer. Bu ayarlarla iş her zaman anında
-// başarılı olur, biz de create+execute+kaydet+oku zincirini kararlı test ederiz.
+// Bu test yalnızca Postgres'i (Testcontainers) gerçek kaldırıyor. Diğer dış
+// bağımlılıkları devre dışı bırakıyoruz:
+//  - spring.cache.type=none  -> @Cacheable Redis'e bağlanmaya çalışmasın.
+//  - JobQueue @MockitoBean    -> POST artık SQS'e mesaj atıyor; sahte kuyruk ile
+//    LocalStack'e ihtiyaç kalmıyor. Bu testin derdi "katmanlar bağlanmış mı",
+//    gerçek SQS entegrasyonu değil.
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
-        properties = {
-                "app.job.simulated.failure-rate=0",
-                "app.job.simulated.min-ms=0",
-                "app.job.simulated.max-ms=0",
-                // Bu test yalnızca Postgres'i (Testcontainers) kaldırıyor, Redis'i değil.
-                // @Cacheable eklendiği için cache açık kalsa test Redis'e bağlanmaya
-                // çalışır ve gizli bir bağımlılık doğar. Cache'i kapatıyoruz — bu testin
-                // derdi "katmanlar doğru bağlanmış mı", cache performansı değil.
-                "spring.cache.type=none"
-        })
+        properties = "spring.cache.type=none")
 @Testcontainers
 @Tag("integration")   // Docker gerektirir; CI'da "integration" grubu şimdilik hariç tutuluyor
 class JobApiIntegrationTest {
@@ -72,19 +66,23 @@ class JobApiIntegrationTest {
     @Autowired
     private TestRestTemplate restTemplate;
 
+    // Gerçek SQS yerine sahte kuyruk: enqueue çağrıları hiçbir şey yapmaz.
+    @MockitoBean
+    private JobQueue jobQueue;
+
     @Test
-    @DisplayName("POST /api/jobs işi oluşturur, senkron çalıştırır ve DONE döner")
-    void postJobs_isiOlusturupCalistirir() {
+    @DisplayName("POST /api/jobs işi PENDING oluşturur, kuyruğa atar ve 202 döner")
+    void postJobs_isiGonderir() {
         // WHEN — gerçek HTTP isteği (Tomcat çalışıyor)
         ResponseEntity<JobResponse> response = restTemplate.postForEntity(
                 "/api/jobs",
                 new CreateJobRequest("email-gonder"),
                 JobResponse.class);
 
-        // THEN — 201 Created ve iş DONE (senkron çalıştı; hata oranı 0'a sabitli)
-        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+        // THEN — 202 Accepted ve iş PENDING (async: worker daha çalıştırmadı)
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.ACCEPTED);
         assertThat(response.getBody()).isNotNull();
-        assertThat(response.getBody().status()).isEqualTo(JobStatus.DONE);
+        assertThat(response.getBody().status()).isEqualTo(JobStatus.PENDING);
         assertThat(response.getBody().type()).isEqualTo("email-gonder");
         assertThat(response.getBody().id()).isNotNull();
     }

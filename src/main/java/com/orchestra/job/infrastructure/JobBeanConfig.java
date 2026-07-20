@@ -3,8 +3,10 @@ package com.orchestra.job.infrastructure;
 import com.orchestra.job.application.CreateJobService;
 import com.orchestra.job.application.ExecuteJobService;
 import com.orchestra.job.application.GetJobService;
+import com.orchestra.job.application.JobQueue;
 import com.orchestra.job.application.JobRepository;
 import com.orchestra.job.application.JobTaskRunner;
+import com.orchestra.job.application.SubmitJobService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -37,6 +39,13 @@ public class JobBeanConfig {
     @Bean
     public GetJobService getJobService(JobRepository jobRepository) {
         return new GetJobService(jobRepository);
+    }
+
+    // JobQueue'yu Spring, SqsJobQueue'dan (@Component) buluyor.
+    @Bean
+    public SubmitJobService submitJobService(CreateJobService createJobService,
+                                             JobQueue jobQueue) {
+        return new SubmitJobService(createJobService, jobQueue);
     }
 
     // JobTaskRunner'ı Spring, SimulatedJobTaskRunner'dan (@Component) buluyor —

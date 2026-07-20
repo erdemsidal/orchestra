@@ -1,8 +1,7 @@
 package com.orchestra.job.infrastructure.web;
 
-import com.orchestra.job.application.CreateJobService;
-import com.orchestra.job.application.ExecuteJobService;
 import com.orchestra.job.application.GetJobService;
+import com.orchestra.job.application.SubmitJobService;
 import com.orchestra.job.domain.Job;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -36,35 +35,35 @@ import java.util.UUID;
 @Tag(name = "Jobs", description = "İş oluşturma ve durum sorgulama")
 public class JobController {
 
-    private final CreateJobService createJobService;
-    private final ExecuteJobService executeJobService;
+    private final SubmitJobService submitJobService;
     private final GetJobService getJobService;
 
-    public JobController(CreateJobService createJobService,
-                         ExecuteJobService executeJobService,
+    public JobController(SubmitJobService submitJobService,
                          GetJobService getJobService) {
-        this.createJobService = createJobService;
-        this.executeJobService = executeJobService;
+        this.submitJobService = submitJobService;
         this.getJobService = getJobService;
     }
 
     /**
-     * Yeni iş oluşturur ve SENKRON olarak çalıştırır.
+     * Yeni iş gönderir (ASENKRON — Faz 3).
      *
-     * Faz 1 tercihi (bkz. yol haritası): işi isteğin İÇİNDE çalıştırıyoruz.
-     * Yani 5 saniyelik bir iş = 5 saniye bekleyen bir HTTP isteği, ve cevap
-     * zaten DONE/FAILED döner (kullanıcı PENDING'i göremez). Bu bilinçli bir
-     * "problem" — Faz 3'te araya kuyruk koyup create ve execute'i ayıracağız;
-     * o zaman istek anında dönecek, işi arka planda worker çalıştıracak.
+     * İşi oluşturur (PENDING), kuyruğa bırakır ve ANINDA döner. İşi çalıştırmaz;
+     * onu arka plandaki worker yapacak. Bu yüzden cevap her zaman PENDING'dir.
+     *
+     * HTTP 202 Accepted (201 Created değil): "isteğini kabul ettim, arka planda
+     * işlenecek, sonucu henüz belli değil." Async iş gönderiminin doğru sinyali.
+     * (201 "kaynak oluştu VE hazır" derdi; oysa iş henüz çalışmadı.)
+     *
+     * Kullanıcı dönen jobId ile GET yapıp durumu takip eder — ilk sorguda büyük
+     * ihtimalle PENDING görür (worker daha almamış olabilir): eventual consistency.
      */
     @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    @Operation(summary = "Yeni iş oluştur ve çalıştır",
-            description = "İşi oluşturur, senkron çalıştırır ve son durumuyla (DONE/FAILED) döner")
-    public JobResponse create(@Valid @RequestBody CreateJobRequest request) {
-        Job created = createJobService.create(request.type());
-        Job finished = executeJobService.execute(created.getId());
-        return JobResponse.from(finished);
+    @ResponseStatus(HttpStatus.ACCEPTED)
+    @Operation(summary = "Yeni iş gönder (asenkron)",
+            description = "İşi PENDING oluşturur, kuyruğa bırakır ve jobId ile hemen döner")
+    public JobResponse submit(@Valid @RequestBody CreateJobRequest request) {
+        Job job = submitJobService.submit(request.type());
+        return JobResponse.from(job);
     }
 
     /**

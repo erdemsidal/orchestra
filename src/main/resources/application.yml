@@ -60,6 +60,21 @@ spring:
       fail-on-unknown-properties: false
     default-property-inclusion: non_null
 
+  # ── AWS / SQS (LocalStack) ───────────────────────────────
+  cloud:
+    aws:
+      region:
+        static: us-east-1          # LocalStack'in varsayılan bölgesi
+      credentials:
+        # LocalStack gerçek kimlik doğrulama yapmaz; herhangi bir değer olur.
+        access-key: test
+        secret-key: test
+      sqs:
+        # ★ BÜTÜN LOCALSTACK NUMARASI BU SATIR ★
+        # SDK'yı gerçek AWS yerine lokaldeki simülatöre yönlendiriyoruz.
+        # Production'da bu satırı silersin, kod gerçek AWS ile konuşur.
+        endpoint: http://localhost:4566
+
 # ═══════════════════════════════════════════════════════════
 # Actuator — uygulamanın gösterge paneli
 # ═══════════════════════════════════════════════════════════
@@ -90,6 +105,8 @@ app:
     capacity: 20            # kova en fazla 20 jeton tutar (burst sınırı)
     refill-tokens: 20       # her periyotta eklenen jeton
     refill-period-seconds: 1  # periyot: 1 saniye -> yani ~20 istek/saniye
+  sqs:
+    queue-name: jobs-queue  # producer buraya atacak, worker buradan alacak
 
 # ═══════════════════════════════════════════════════════════
 # Server
