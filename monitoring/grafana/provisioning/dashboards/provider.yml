@@ -1,0 +1,8 @@
+# Grafana, /var/lib/grafana/dashboards altındaki dashboard JSON'larını otomatik yükler.
+apiVersion: 1
+providers:
+  - name: orchestra
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

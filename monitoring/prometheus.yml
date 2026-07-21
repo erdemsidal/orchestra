@@ -1,0 +1,11 @@
+# Prometheus — uygulamanın /actuator/prometheus metriklerini periyodik toplar.
+global:
+  scrape_interval: 5s      # her 5 saniyede bir kazı
+
+scrape_configs:
+  - job_name: orchestra
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # Uygulama host'ta (mvnw spring-boot:run) çalışıyor; konteynerden host'a
+      # host.docker.internal ile erişiyoruz (Docker Desktop bunu sağlar).
+      - targets: ['host.docker.internal:8080']
