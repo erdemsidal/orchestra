@@ -1,5 +1,6 @@
 package com.orchestra.job.infrastructure.messaging;
 
+import com.orchestra.job.application.DeadLetterService;
 import com.orchestra.job.application.ExecuteJobService;
 import io.awspring.cloud.sqs.annotation.SqsListener;
 import org.slf4j.Logger;
@@ -33,14 +34,28 @@ public class JobWorker {
 
     private final ExecuteJobService executeJobService;
 
-    public JobWorker(ExecuteJobService executeJobService) {
+    private final DeadLetterService deadLetterService;
+
+    public JobWorker(ExecuteJobService executeJobService, DeadLetterService deadLetterService) {
         this.executeJobService = executeJobService;
+        this.deadLetterService = deadLetterService;
     }
 
     @SqsListener("${app.sqs.queue-name}")
     public void onMessage(String jobId) {
         log.info("Kuyruktan iş alındı: {}", jobId);
         executeJobService.execute(UUID.fromString(jobId));
-        // Metot buraya sorunsuz geldiyse spring-cloud-aws mesajı otomatik siler.
+        // Normal biterse spring-cloud-aws mesajı siler. execute() geçici hatada
+        // istisna fırlatırsa mesaj silinmez -> SQS tekrar teslim eder (retry).
+    }
+
+    /**
+     * DLQ dinleyicisi: ana kuyrukta 3 kez denenip başarısız olan mesajlar buraya
+     * düşer. Onları kalıcı olarak FAILED işaretliyoruz (döngüyü kapatıyoruz).
+     */
+    @SqsListener("${app.sqs.dlq-name}")
+    public void onDeadLetter(String jobId) {
+        log.warn("DLQ'dan iş alındı: {}", jobId);
+        deadLetterService.handleDeadLetter(UUID.fromString(jobId));
     }
 }

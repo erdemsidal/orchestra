@@ -1,6 +1,7 @@
 package com.orchestra.job.infrastructure;
 
 import com.orchestra.job.application.CreateJobService;
+import com.orchestra.job.application.DeadLetterService;
 import com.orchestra.job.application.ExecuteJobService;
 import com.orchestra.job.application.GetJobService;
 import com.orchestra.job.application.JobQueue;
@@ -54,5 +55,10 @@ public class JobBeanConfig {
     public ExecuteJobService executeJobService(JobRepository jobRepository,
                                                JobTaskRunner jobTaskRunner) {
         return new ExecuteJobService(jobRepository, jobTaskRunner);
+    }
+
+    @Bean
+    public DeadLetterService deadLetterService(JobRepository jobRepository) {
+        return new DeadLetterService(jobRepository);
     }
 }

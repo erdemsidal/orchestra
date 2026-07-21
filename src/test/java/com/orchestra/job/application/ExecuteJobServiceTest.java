@@ -73,6 +73,24 @@ class ExecuteJobServiceTest {
     }
 
     @Test
+    @DisplayName("execute() geçici hatada FAILED yapmaz, istisnayı fırlatır (retry için)")
+    void execute_geciciHata_yenidenFirlatir() {
+        // GIVEN — PENDING iş ve GEÇİCİ hata fırlatan runner
+        FakeJobRepository repo = new FakeJobRepository();
+        Job job = new Job(UUID.randomUUID(), "email-gonder");
+        repo.save(job);
+        JobTaskRunner geciciHataRunner = j -> { throw new TransientJobException("geçici"); };
+        ExecuteJobService service = new ExecuteJobService(repo, geciciHataRunner);
+
+        // WHEN + THEN — istisna YUKARI fırlar (worker'a "tekrar dene" sinyali)
+        assertThatThrownBy(() -> service.execute(job.getId()))
+                .isInstanceOf(TransientJobException.class);
+        // İş FAILED OLMADI, RUNNING kaldı — bir sonraki teslimatta retry edilecek
+        assertThat(repo.findById(job.getId()).orElseThrow().getStatus())
+                .isEqualTo(JobStatus.RUNNING);
+    }
+
+    @Test
     @DisplayName("execute() duplicate'i atlar: terminal işte runner'ı ÇAĞIRMAZ (idempotency)")
     void execute_zatenTerminalIs_runnerCagirmaz() {
         // GIVEN — repoda zaten DONE olan bir iş (bir önceki teslimatta işlenmiş)

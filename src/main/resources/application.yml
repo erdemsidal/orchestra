@@ -107,6 +107,7 @@ app:
     refill-period-seconds: 1  # periyot: 1 saniye -> yani ~20 istek/saniye
   sqs:
     queue-name: jobs-queue  # producer buraya atacak, worker buradan alacak
+    dlq-name: jobs-dlq      # 3 denemede işlenemeyen mesajlar buraya düşer
 
 # ═══════════════════════════════════════════════════════════
 # Server

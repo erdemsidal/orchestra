@@ -1,6 +1,7 @@
 package com.orchestra.job.infrastructure;
 
 import com.orchestra.job.application.JobTaskRunner;
+import com.orchestra.job.application.TransientJobException;
 import com.orchestra.job.domain.Job;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,9 +51,20 @@ public class SimulatedJobTaskRunner implements JobTaskRunner {
             throw new RuntimeException("İş kesintiye uğradı", e);
         }
 
-        // Belirli bir olasılıkla "iş başarısız oldu" diye patla.
+        // Demo için özel iş türleri:
+        //  "zehir" -> HER ZAMAN geçici hata. Retry'lar tükenir, mesaj DLQ'ya gider.
+        if ("zehir".equals(job.getType())) {
+            throw new TransientJobException("Zehirli iş: her zaman başarısız");
+        }
+        //  "bozuk" -> KALICI hata. Retry edilmez, iş hemen FAILED olur.
+        if ("bozuk".equals(job.getType())) {
+            throw new RuntimeException("Bozuk iş: kalıcı hata");
+        }
+
+        // Normal işler: belirli bir olasılıkla GEÇİCİ hata. Geçici olduğu için
+        // retry edilir ve çoğu zaman ikinci/üçüncü denemede başarılı olur.
         if (ThreadLocalRandom.current().nextDouble() < failureRate) {
-            throw new RuntimeException("Simüle edilmiş iş hatası");
+            throw new TransientJobException("Simüle edilmiş geçici hata");
         }
     }
 }

@@ -37,35 +37,36 @@ public class ExecuteJobService {
         Job job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new JobNotFoundException(jobId));
 
-        // IDEMPOTENCY: iş zaten PENDING değilse bu bir duplicate (SQS at-least-once).
-        // Tekrar çalıştırmıyoruz; istisna DA fırlatmıyoruz ki worker mesajı sorunsuz
-        // silsin (yoksa mesaj sonsuza dek geri gelirdi). İşi olduğu gibi döndürüyoruz.
-        if (job.getStatus() != JobStatus.PENDING) {
-            log.info("Duplicate atlandı (idempotency): id={} mevcut durum={}", jobId, job.getStatus());
+        // IDEMPOTENCY: terminal (DONE/FAILED) iş bir daha çalışmaz. Duplicate mesaj
+        // gelirse sessizce atla (worker mesajı silsin). Bkz. ADR 0007.
+        if (job.getStatus().isTerminal()) {
+            log.info("Terminal iş atlandı (idempotency): id={} durum={}", jobId, job.getStatus());
             return job;
         }
 
-        // RUNNING'e geç ve HEMEN kaydet. Neden run()'dan önce kaydediyoruz?
-        //  - taskRunner uzun sürebilir; bu sırada biri GET yaparsa işi RUNNING
-        //    görmeli, hâlâ PENDING değil.
-        //  - Süreç run() ortasında çökerse durum RUNNING kalır — "hiç başlamamış"
-        //    gibi PENDING'de takılı kalmaz. (Faz 3'te bu, yarım kalan işleri
-        //    tespit etmek için önemli olacak.)
-        job.start();
-        jobRepository.save(job);
-
-        try {
-            taskRunner.run(job);   // asıl iş burada; başarısızsa RuntimeException fırlatır
-            job.markDone();
-        } catch (RuntimeException e) {
-            // İşin başarısız olması bizim için bir HATA DEĞİL, beklenen bir sonuç.
-            // O yüzden istisnayı yukarı fırlatmıyoruz (yoksa çağıran 500 alırdı);
-            // işi FAILED işaretleyip normal dönüyoruz. API "iş başarısız oldu"
-            // diyen geçerli bir cevap döner, "sunucu patladı" değil.
-            log.warn("İş başarısız oldu: id={} sebep={}", jobId, e.getMessage());
-            job.markFailed();
+        // PENDING ise başlat + kaydet. RUNNING ise bu bir RETRY'dır (önceki deneme
+        // bitmeden mesaj tekrar geldi) — start() yalnızca PENDING'den çalışır, o
+        // yüzden tekrar çağırmıyoruz; doğrudan yeniden çalıştırmayı deniyoruz.
+        if (job.getStatus() == JobStatus.PENDING) {
+            job.start();
+            jobRepository.save(job);
         }
 
-        return jobRepository.save(job);
+        try {
+            taskRunner.run(job);   // asıl iş; başarısızsa istisna fırlatır
+            job.markDone();
+            return jobRepository.save(job);
+        } catch (TransientJobException e) {
+            // GEÇİCİ hata: FAILED yapma, YUKARI FIRLAT. Worker mesajı silmez;
+            // SQS visibility timeout sonrası tekrar teslim eder (retry). 3 denemede
+            // hâlâ başarısızsa redrive policy mesajı DLQ'ya taşır. İş RUNNING kalır.
+            log.warn("Geçici hata, retry için yeniden fırlatılıyor: id={} sebep={}", jobId, e.getMessage());
+            throw e;
+        } catch (RuntimeException e) {
+            // KALICI hata: tekrar denemek boşuna. FAILED işaretle, mesaj silinsin.
+            log.warn("Kalıcı hata, iş FAILED: id={} sebep={}", jobId, e.getMessage());
+            job.markFailed();
+            return jobRepository.save(job);
+        }
     }
 }
