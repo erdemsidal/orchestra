@@ -1,10 +1,10 @@
 # Job Orchestrator
 
-An asynchronous job processing service, built in three phases: clean architecture, then scalability, then distributed and event-driven. Java 21, Spring Boot 3, PostgreSQL.
+An asynchronous job processing service, built in three phases: clean architecture, then scalability, then distributed and event-driven. Java 21, Spring Boot 3, PostgreSQL, SQS.
 
-You submit a job, you get an ID back immediately, workers run it in the background, and you poll the ID to see how it went.
+You submit a job, you get an ID back immediately, a worker runs it in the background off a queue, and you poll the ID to see how it went.
 
-**Current status: Phase 1 is done.** The system is synchronous and single-service right now, and that's deliberate. Phase 3 is where it becomes distributed, and the contrast between the two is the whole point. See the [roadmap](#roadmap).
+**Status: all three phases done.** The system is now distributed and event-driven — the API just enqueues, a separate worker consumes and runs the job. See the [roadmap](#roadmap).
 
 ---
 
@@ -20,14 +20,16 @@ It's not a product. Nobody's going to use it to send emails.
 
 ## How it works
 
-A job moves through four states, and it can't cheat:
+You `POST` a job. The API creates it as `PENDING`, drops its id on a queue, and returns **`202 Accepted`** immediately — it does **not** run the work. A separate worker pulls the id off the queue, runs the job, and updates its status. You `GET` the id to watch it move:
 
 ```
 PENDING ──► RUNNING ──► DONE
                  └────► FAILED
 ```
 
-Invalid transitions are impossible, not discouraged. `PENDING -> DONE` throws. `DONE -> RUNNING` throws. The `Job` object refuses to be put into an inconsistent state, so no caller can bypass the rules — not the controller, not a future worker, not me at 2am.
+Invalid transitions are impossible, not discouraged. `PENDING -> DONE` throws. `DONE -> RUNNING` throws. The `Job` object refuses to be put into an inconsistent state, so no caller can bypass the rules — not the controller, not the worker, not me at 2am.
+
+Right after `POST`, a `GET` will usually show `PENDING` — the worker hasn't picked it up yet. That's not a bug, it's **eventual consistency**: the natural cost of decoupling. In exchange, the API stays responsive under load instead of blocking on a 30-second job.
 
 There is deliberately no endpoint to set a job's status. More on that below.
 
@@ -35,20 +37,22 @@ There is deliberately no endpoint to set a job's status. More on that below.
 
 ## Architecture
 
-Hexagonal (ports and adapters). Three layers, dependencies point inward:
+Two views: the layers (hexagonal) and the runtime (distributed).
+
+### Layers — dependencies point inward
 
 ```
-infrastructure/          Spring, JPA and HTTP live here
-  web/                   JobController, request/response DTOs
+infrastructure/          Spring, JPA, HTTP and SQS live here
+  web/                   JobController, request/response DTOs, RateLimitFilter
   persistence/           JobEntity, JpaJobRepositoryAdapter
+  messaging/             SqsJobQueue (producer), JobWorker (@SqsListener consumer)
   JobBeanConfig          wires use cases into Spring
         |
         | depends on
         v
 application/             Pure Java, no framework
-  JobRepository          the port — an interface I own
-  CreateJobService
-  GetJobService
+  JobRepository, JobQueue, JobTaskRunner   ← ports (interfaces I own)
+  SubmitJobService, GetJobService, ExecuteJobService, DeadLetterService
         |
         | depends on
         v
@@ -56,9 +60,31 @@ domain/                  Pure Java, no framework
   Job, JobStatus         the rules live here
 ```
 
-`domain/` and `application/` contain zero Spring or JPA imports. The test for whether that's real: if I deleted Spring Boot, could I still test my business rules? Yes — 11 of the tests here run with no database, no Spring context and no Docker, in 0.14 seconds total.
+`domain/` and `application/` contain zero Spring, JPA or AWS imports. The test for whether that's real: if I deleted Spring Boot, could I still test my business rules? Yes — the unit tests run with no database, no Spring context and no Docker, in milliseconds.
 
-Everything about jobs lives under `job/`. Package-by-feature, not `controller/` + `service/` + `entity/`. When Phase 3 adds a worker, it gets its own folder instead of smearing across five existing ones.
+### Runtime — producer, queue, worker
+
+```
+        POST /jobs                                     GET /jobs/{id}
+            │                                                │
+            ▼                                                ▼
+     SubmitJobService                                  GetJobService
+       │        │                                           │
+  save PENDING  └─ enqueue(jobId) ─► jobs-queue (SQS)        │
+       │                                 │  ▲                │
+       ▼                                 │  │ retry          ▼
+    Postgres  ◄──────────────────────────┼──┼──────────  Postgres
+    (source of truth)                    ▼  │           (PENDING→RUNNING→
+                                    JobWorker│            DONE/FAILED)
+                                  (runs job) │
+                                     3 fails │
+                                        ▼    │
+                                    jobs-dlq ─► DLQ listener → marks FAILED
+```
+
+The queue holds only the **jobId** (a small "ticket"); the full job record lives in Postgres (the single source of truth). The worker takes a ticket, loads the job, runs it, and updates the DB.
+
+Everything about jobs lives under `job/`. Package-by-feature, not `controller/` + `service/` + `entity/` — the whole feature is in one place.
 
 ---
 
@@ -70,12 +96,14 @@ Everything about jobs lives under `job/`. Package-by-feature, not `controller/` 
 | Framework | Spring Boot 3.4 | Jakarta EE 10, mature ecosystem |
 | Database | PostgreSQL 16 | Boring is good |
 | Migrations | Flyway | Versioned SQL in git. `ddl-auto` is `validate`, so Hibernate never touches the schema |
+| Queue | AWS SQS (via spring-cloud-aws) | Managed, at-least-once, no ops. Run locally on LocalStack |
+| Local AWS | LocalStack | Fakes SQS on `localhost:4566` — same SDK, no account, no bill |
+| Cache | Redis 7 | Caches terminal `GET /jobs/{id}` (Phase 2) |
+| Rate limiting | Bucket4j | Token bucket, per-IP, on `POST /jobs` (Phase 2) |
 | Build | Maven (wrapper) | `./mvnw` works anywhere, no global install |
 | API docs | springdoc-openapi | Swagger UI at `/swagger-ui.html` |
 | Testing | JUnit 5, AssertJ, Testcontainers | Real Postgres in tests, not H2 |
-| Cache | Redis 7 | Caches `GET /jobs/{id}` (Phase 2) |
-| Rate limiting | Bucket4j | Token bucket, per-IP, on `POST /jobs` (Phase 2) |
-| Containers | Docker Compose | Postgres and Redis in one command |
+| Containers | Docker Compose | Postgres, Redis and LocalStack in one command |
 
 ---
 
@@ -87,7 +115,7 @@ You need Java 21 and Docker.
 git clone https://github.com/erdemsidal/orchestra.git
 cd orchestra
 
-# Postgres + Redis
+# Postgres + Redis + LocalStack (creates the SQS queues on startup)
 docker compose up -d
 
 # Flyway creates the schema on startup
@@ -99,16 +127,18 @@ The app runs on `http://localhost:8080`. Swagger UI is at `http://localhost:8080
 Try it:
 
 ```bash
+# Submit a job — returns immediately, the work runs in the background
 curl -X POST http://localhost:8080/api/jobs \
   -H "Content-Type: application/json" \
   -d '{"type":"send-email"}'
-# 201 {"id":"b4f43279-...","type":"send-email","status":"DONE"}
-# The job runs synchronously inside the request (Phase 1), so the response
-# already reflects the final state — DONE, or FAILED if the work threw.
+# 202 {"id":"b4f43279-...","type":"send-email","status":"PENDING"}
 
+# Poll it — PENDING at first (eventual consistency), then RUNNING, then DONE
 curl http://localhost:8080/api/jobs/b4f43279-...
 # 200 {"id":"b4f43279-...","type":"send-email","status":"DONE"}
 ```
+
+Watch the queue live while you POST: `bash localstack/watch-queue.sh`.
 
 ---
 
@@ -116,8 +146,8 @@ curl http://localhost:8080/api/jobs/b4f43279-...
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| `POST` | `/api/jobs` | Create a job and run it synchronously. Returns 201 with the job ID and its final status (`DONE` or `FAILED`) |
-| `GET` | `/api/jobs/{id}` | Get a job's current status. 404 if it doesn't exist |
+| `POST` | `/api/jobs` | Submit a job. Returns **202 Accepted** with the job ID, status `PENDING`. A worker runs it asynchronously |
+| `GET` | `/api/jobs/{id}` | Get a job's current status (`PENDING`/`RUNNING`/`DONE`/`FAILED`). 404 if it doesn't exist |
 | `GET` | `/api/health` | Health check |
 | `GET` | `/actuator/health` | Actuator health |
 
@@ -125,20 +155,17 @@ Two endpoints. No `PUT`, no `DELETE`. That's not laziness, see below.
 
 ---
 
-## Testing
+## Distributed processing (Phase 3)
 
-```bash
-./mvnw test
-```
+The API (producer) and the worker (consumer) are decoupled by an SQS queue. This is where the interesting distributed-systems problems live, and each one has an ADR:
 
-| Type | Count | Time | What it answers |
-|------|-------|------|-----------------|
-| Unit (domain + application) | 11 | 0.14s | Are my rules correct? |
-| Integration (Testcontainers) | 4 | 21s | Are the pieces wired correctly? |
+- **Producer / async submit** — `POST` enqueues and returns in ~15ms instead of blocking on the job. The queue acts as a shock absorber: a traffic spike lengthens the queue instead of crashing the API.
+- **Eventual consistency** — a `GET` right after `POST` shows `PENDING`. By design, not a bug.
+- **Idempotency** — SQS delivers at-least-once, so the same message can arrive twice. The job's status *is* the dedup key: a job only leaves `PENDING` once, and a duplicate for an already-terminal job is skipped. No dedup table. ([ADR 0007](docs/adr/0007-idempotency.md), incl. the honest limit on concurrent duplicates.)
+- **Retry + backoff** — a transient failure makes the worker rethrow; SQS redelivers after the visibility timeout (5s). No custom retry code — at-least-once *is* the retry. Backoff is fixed, not exponential ([ADR 0008](docs/adr/0008-retry-backoff-dlq.md)).
+- **Dead-letter queue** — after 3 failed attempts (redrive policy), a message moves to `jobs-dlq` instead of looping forever. A DLQ listener marks the job `FAILED`.
 
-A 150x difference, and that's exactly why the pyramid has a wide base. If every rule needed a real Postgres, the suite would take minutes and nobody would run it.
-
-The integration tests start a real PostgreSQL container through Testcontainers, so there's no manual `docker compose up` and CI behaves the same as my laptop. Not H2: it doesn't faithfully emulate Postgres's UUID type, indexes or SQL dialect, and "passed in tests, exploded in prod" starts right there.
+Why SQS over Kafka/RabbitMQ, and LocalStack over real AWS: [ADR 0006](docs/adr/0006-kuyruk-teknolojisi.md).
 
 ---
 
@@ -160,22 +187,22 @@ fast (~5ms). The win shows up **under load**: without the cache, concurrent
 requests queue for one of Hikari's 20 DB connections and p95 climbs; the cache
 serves them from Redis with no pool contention.
 
-No cache invalidation is needed here, and that's deliberate — see
-[ADR 0004](docs/adr/0004-cache-stratejisi.md). Because POST runs synchronously, a
-job is already terminal (`DONE`/`FAILED`) by the time it can be fetched, so the
-cached value never goes stale. Phase 3 makes jobs async — and that's exactly when
-invalidation becomes a real problem.
+Cache invalidation would be a nightmare here, so we don't do it — we only cache
+**terminal** jobs. A `DONE`/`FAILED` job never changes, so it's safe to cache
+forever; `PENDING`/`RUNNING` are read fresh from the DB every time. (Phase 3 made
+jobs async and this staleness became real — I caught it live and fixed it with a
+one-line `unless` condition. Story in [ADR 0004](docs/adr/0004-cache-stratejisi.md).)
 
 Reproduce it: `docker compose up -d && ./mvnw spring-boot:run`, then
-`k6 run load-tests/get-job.js` (comment out the `@Cacheable` for the baseline).
+`k6 run load-tests/get-job.js`.
 
 ## Rate limiting
 
-`POST /jobs` runs work synchronously, so an abusive client could hammer it and
-starve the system. A servlet filter enforces a **token bucket** (Bucket4j) per
-client IP — 20 requests/second with a burst of 20 — before the request ever
-reaches the controller. Over the limit gets `429 Too Many Requests` with a
-`Retry-After` header. Measured: 100 concurrent POSTs → 61 through, 39 rejected.
+`POST /jobs` triggers real work, so an abusive client could flood it. A servlet
+filter enforces a **token bucket** (Bucket4j) per client IP — 20 requests/second
+with a burst of 20 — before the request ever reaches the controller. Over the
+limit gets `429 Too Many Requests` with a `Retry-After` header. Measured: 100
+concurrent POSTs → 61 through, 39 rejected.
 
 Token bucket allows short bursts (up to the bucket capacity) but caps the
 sustained rate at the refill rate — which is what you actually want, since real
@@ -183,58 +210,71 @@ users click in bursts. Reasoning, plus the honest limitations (per-IP is crude
 behind NAT; in-memory buckets don't span multiple instances), in
 [ADR 0005](docs/adr/0005-rate-limiting.md).
 
+---
+
+## Testing
+
+```bash
+./mvnw test
+```
+
+Unit tests (domain + application) run with fakes — no DB, no Spring, no Docker — in
+milliseconds, and answer "are my rules correct?". A handful of Testcontainers
+integration tests spin up a **real** PostgreSQL and answer "are the pieces wired
+correctly?". That's the test pyramid: a wide base of fast tests, a few slow ones on
+top. Not H2 — it doesn't faithfully emulate Postgres's UUID type, indexes or SQL
+dialect, and "passed in tests, exploded in prod" starts right there.
+
+---
+
 ## Why these decisions?
 
 This is the section I wish more repos had. Full reasoning lives in [`docs/adr/`](docs/adr/).
 
-### Why a repository port instead of just using `JpaRepository`?
+### Why a repository/queue **port** instead of using the framework directly?
 
-Not so I can swap Postgres for MongoDB. Nobody does that, and saying it in an interview should earn you a raised eyebrow.
+Not so I can swap Postgres for MongoDB or SQS for RabbitMQ. Nobody does that, and saying it in an interview should earn you a raised eyebrow.
 
-The real reason is testing. `CreateJobService` has to save something. If it depends on Spring Data directly, testing it needs a real database: Docker, Testcontainers, several seconds, for every test. If it depends on `JobRepository` — an interface I own — I hand it a `HashMap`-backed fake and the test runs in a millisecond.
-
-The second reason: `JpaRepository` is Spring's interface, not mine. Extend it and you inherit its whole world — `flush()`, lazy loading, detached entities, `LazyInitializationException`. My port has two methods and speaks in domain objects.
+The real reason is testing. `SubmitJobService` has to save and enqueue. If it depends on Spring Data / the AWS SDK directly, testing it needs a real database and a real queue. Depending on `JobRepository` and `JobQueue` — interfaces I own — I hand it fakes (a `HashMap`, a lambda) and the test runs in a millisecond. The infrastructure adapters (`JpaJobRepositoryAdapter`, `SqsJobQueue`) are the only things that touch the framework.
 
 ### Why is `JobEntity` a separate class from `Job`?
 
-Because JPA's requirements would destroy the domain's guarantees. JPA needs a no-arg constructor, but `Job`'s constructor is exactly where "a new job is always PENDING" is enforced. JPA needs setters, but `Job` deliberately has none, because status only moves through `start()`, `markDone()` and `markFailed()`.
-
-Merge them and you strip every protection to keep Hibernate happy. Kept apart, `JobEntity` obeys JPA and `Job` obeys the business. An adapter translates between them.
+Because JPA's requirements would destroy the domain's guarantees. JPA needs a no-arg constructor, but `Job`'s constructor is exactly where "a new job is always PENDING" is enforced. JPA needs setters, but `Job` deliberately has none, because status only moves through `start()`, `markDone()` and `markFailed()`. Kept apart, `JobEntity` obeys JPA and `Job` obeys the business. An adapter translates.
 
 ### Why no `PUT /jobs/{id}` or `DELETE`?
 
-This is the one I'd defend hardest.
+If I exposed `updateJob(status)`, a client could `PUT {"status":"DONE"}` on a job that never ran — bypassing every state rule in one request. Status isn't a field you set; it's the consequence of something happening. And `DELETE`? A job is a record ("this ran last Tuesday and failed"). You don't delete history. This is CRUD thinking vs use-case thinking: the answer to "what can a user actually do?" is two things, so there are two endpoints.
 
-If I exposed `updateJob(status)`, a client could do this:
+### Why send only the jobId on the queue, not the whole job?
 
-```json
-PUT /api/jobs/abc-123
-{ "status": "DONE" }
-```
+Messages stay small, and there's one source of truth (the DB). If I copied the job's data into the message, that copy could go stale. The worker takes the id and reads the current truth from Postgres.
 
-A PENDING job, marked done, having never run. Every state rule I wrote and every test protecting them, bypassed in one request.
+### Why the job's status as the idempotency key, instead of a dedup table?
 
-Status isn't a field you set. It's the consequence of something happening. The user creates a job and reads it; the system advances it through the domain rules.
+The job already has a natural single-transition guard (`start()` only works from `PENDING`). Reusing it avoids an extra table and an extra write. The trade-off (concurrent duplicate delivery) is documented honestly in [ADR 0007](docs/adr/0007-idempotency.md).
 
-And `DELETE`? A job is a record — "this ran last Tuesday and failed". You don't delete history.
+### A few more, briefly
 
-This is the difference between CRUD thinking ("I have a table, so I need four operations") and use-case thinking ("what can a user actually do here?"). The answer is two things, so there are two endpoints.
+- **No `@Service` on use cases** — keeps `application/` framework-free; `JobBeanConfig` wires them.
+- **`VARCHAR` status, not ordinal** — reorder the enum and every historical `0`/`1` silently changes meaning.
+- **State machine inside `Job`** — four states, almost linear; a dedicated class would be over-engineering ([ADR 0001](docs/adr/0001-durum-yonetimi.md)).
 
-### Why return a DTO instead of the entity?
+---
 
-Return `JobEntity` and your database schema quietly becomes your API contract. Add a column, break every client. `JobResponse` makes the contract explicit: what's written there is what ships.
+## Decision records
 
-### Why is the state machine inside `Job` and not its own class?
+The reasoning behind everything, one file each in [`docs/adr/`](docs/adr/):
 
-Four states and an almost-linear flow. A dedicated `JobStateMachine` would be over-engineering today, and moving the rules out later is a small refactor if the states multiply. Start simple where changing your mind is cheap. The full reasoning, and the trigger for revisiting it, is in [ADR 0001](docs/adr/0001-durum-yonetimi.md).
-
-### Why no `@Service` on the use cases?
-
-So `application/` stays framework-free. `JobBeanConfig` registers them as beans instead. It costs one extra class and buys a layer with zero Spring imports, plus a single visible place where wiring happens.
-
-### Why `VARCHAR` for status instead of an ordinal?
-
-Store `0` and the day someone reorders the enum, every historical row silently means something else. `PENDING` is readable in `psql` and doesn't rot.
+| # | Decision |
+|---|----------|
+| [0001](docs/adr/0001-durum-yonetimi.md) | State transitions live inside `Job`, not a separate state machine |
+| [0002](docs/adr/0002-api-tasarimi-use-case.md) | Use-case API, not CRUD (no `PUT`/`DELETE`) |
+| [0003](docs/adr/0003-paket-yapisi.md) | Package-by-feature with flat layers |
+| [0004](docs/adr/0004-cache-stratejisi.md) | Cache only terminal jobs (invalidation avoided) |
+| [0005](docs/adr/0005-rate-limiting.md) | Token-bucket rate limiting, per-IP, app layer |
+| [0006](docs/adr/0006-kuyruk-teknolojisi.md) | SQS over Kafka/RabbitMQ, on LocalStack |
+| [0007](docs/adr/0007-idempotency.md) | Job status as the idempotency key |
+| [0008](docs/adr/0008-retry-backoff-dlq.md) | Retry via SQS redelivery, DLQ via redrive policy |
 
 ---
 
@@ -243,11 +283,11 @@ Store `0` and the day someone reorders the enum, every historical row silently m
 **Phase 1 — Clean architecture. Done.**
 Synchronous, single service. Hexagonal layers, Postgres and Flyway, unit and integration tests, Docker Compose.
 
-**Phase 2 — Scalability.**
-Redis caching, rate limiting, load testing with k6, metrics. The deliverable isn't "I added a cache", it's a measured before/after p95 latency table.
+**Phase 2 — Scalability. Done.**
+Redis caching (a measured 3× p95 improvement), token-bucket rate limiting, k6 load tests, Actuator/Prometheus metrics.
 
-**Phase 3 — Distributed and event-driven.**
-Split the worker out and put a queue (SQS) between them. Dead-letter queue, retry with exponential backoff, idempotency, eventual consistency. This is where Phase 1's synchronous design gets deliberately broken and replaced.
+**Phase 3 — Distributed and event-driven. Done.**
+The worker split out from the API with an SQS queue between them. Async submit, a `@SqsListener` worker, idempotency, retry, dead-letter queue, eventual consistency — all running on LocalStack.
 
 ---
 
@@ -255,10 +295,11 @@ Split the worker out and put a queue (SQS) between them. Dead-letter queue, retr
 
 Being honest about the gaps:
 
-- **CI.** Deferred. The tests all pass locally (`./mvnw test`), but wiring up a pipeline that runs them on GitHub — including the Testcontainers integration tests, which need Docker — is a task for later. I'd rather no pipeline than a red one that lies about the state of the code.
-- Authentication. Deliberately stripped — Phase 1 is about architecture, and auth would have been scope creep.
-- Metrics, caching, rate limiting. Phase 2.
-- The queue, workers, retries, DLQ. Phase 3.
+- **CI.** Deferred. The tests pass locally (`./mvnw test`); wiring a green pipeline that also runs the Testcontainers integration tests is a task for later. Better no pipeline than a red one that lies.
+- **Exponential backoff.** Retry backoff is currently fixed (the SQS visibility timeout). True exponential backoff needs per-attempt `ChangeMessageVisibility` ([ADR 0008](docs/adr/0008-retry-backoff-dlq.md)).
+- **Concurrent duplicate delivery.** The status-based idempotency covers redelivery; two truly simultaneous deliveries could race ([ADR 0007](docs/adr/0007-idempotency.md)).
+- **Separate worker deployment.** The worker runs in-process today; a real deployment would run it as its own scalable service (same `@SqsListener` code).
+- **Authentication.** Deliberately stripped — this is an architecture study, and auth would have been scope creep.
 
 ---
 
