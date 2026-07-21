@@ -71,4 +71,26 @@ class ExecuteJobServiceTest {
         assertThat(repo.findById(job.getId()).orElseThrow().getStatus())
                 .isEqualTo(JobStatus.FAILED);
     }
+
+    @Test
+    @DisplayName("execute() duplicate'i atlar: terminal işte runner'ı ÇAĞIRMAZ (idempotency)")
+    void execute_zatenTerminalIs_runnerCagirmaz() {
+        // GIVEN — repoda zaten DONE olan bir iş (bir önceki teslimatta işlenmiş)
+        FakeJobRepository repo = new FakeJobRepository();
+        Job job = new Job(UUID.randomUUID(), "email-gonder");
+        job.start();
+        job.markDone();          // artık DONE (terminal)
+        repo.save(job);
+        // Runner çağrılırsa testi patlatan bir "tuzak" runner: çağrılMAmalı.
+        boolean[] runnerCagrildi = {false};
+        JobTaskRunner tuzakRunner = j -> runnerCagrildi[0] = true;
+        ExecuteJobService service = new ExecuteJobService(repo, tuzakRunner);
+
+        // WHEN — aynı iş ikinci kez execute'a gelirse (duplicate mesaj)
+        Job sonuc = service.execute(job.getId());
+
+        // THEN — runner HİÇ çağrılmadı (iş ikinci kez çalışmadı), durum DONE kaldı
+        assertThat(runnerCagrildi[0]).isFalse();
+        assertThat(sonuc.getStatus()).isEqualTo(JobStatus.DONE);
+    }
 }

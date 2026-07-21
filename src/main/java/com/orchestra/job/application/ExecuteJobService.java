@@ -2,6 +2,7 @@ package com.orchestra.job.application;
 
 import com.orchestra.job.domain.Job;
 import com.orchestra.job.domain.JobNotFoundException;
+import com.orchestra.job.domain.JobStatus;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,6 +15,11 @@ import java.util.UUID;
  * burası çağırıyor. Yani "iş nasıl ilerliyor" sorusunun cevabı bu sınıf.
  *
  * Akış: PENDING işi bul -> RUNNING yap -> çalıştır -> DONE ya da FAILED.
+ *
+ * IDEMPOTENT (bkz. ADR 0007): SQS at-least-once teslimat yapar, aynı mesaj iki
+ * kez gelebilir. İş zaten PENDING değilse (yani başlamış/bitmiş), tekrar
+ * çalıştırmıyoruz — sessizce dönüyoruz. İşin durumu bizim idempotency
+ * anahtarımız: bir iş yalnızca bir kez PENDING->RUNNING geçebilir.
  */
 public class ExecuteJobService {
 
@@ -30,6 +36,14 @@ public class ExecuteJobService {
     public Job execute(UUID jobId) {
         Job job = jobRepository.findById(jobId)
                 .orElseThrow(() -> new JobNotFoundException(jobId));
+
+        // IDEMPOTENCY: iş zaten PENDING değilse bu bir duplicate (SQS at-least-once).
+        // Tekrar çalıştırmıyoruz; istisna DA fırlatmıyoruz ki worker mesajı sorunsuz
+        // silsin (yoksa mesaj sonsuza dek geri gelirdi). İşi olduğu gibi döndürüyoruz.
+        if (job.getStatus() != JobStatus.PENDING) {
+            log.info("Duplicate atlandı (idempotency): id={} mevcut durum={}", jobId, job.getStatus());
+            return job;
+        }
 
         // RUNNING'e geç ve HEMEN kaydet. Neden run()'dan önce kaydediyoruz?
         //  - taskRunner uzun sürebilir; bu sırada biri GET yaparsa işi RUNNING
