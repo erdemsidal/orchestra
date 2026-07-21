@@ -49,11 +49,10 @@ public class JpaJobRepositoryAdapter implements JobRepository {
 
     /**
      * JPA entity -> domain Job.
-     * Job'un "reconstitution" constructor'ını kullanıyoruz: DB'deki iş
-     * PENDING olmak zorunda değil (RUNNING/DONE olabilir), o yüzden
-     * durumu dışarıdan veren constructor lazım.
+     * Job.reconstitute() ile geri kuruyoruz: DB'deki iş PENDING olmak zorunda
+     * değil (RUNNING/DONE olabilir). Bu, adlandırılmış "yeniden kurma" yolu.
      */
     private Job toDomain(JobEntity entity) {
-        return new Job(entity.getId(), entity.getType(), entity.getStatus());
+        return Job.reconstitute(entity.getId(), entity.getType(), entity.getStatus());
     }
 }

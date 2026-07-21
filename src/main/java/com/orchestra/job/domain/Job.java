@@ -28,15 +28,23 @@ public class Job {
         this.status = JobStatus.PENDING;
     }
 
-    /**
-     * Var olan bir işi (ör. veritabanından okunan) yeniden kurmak için.
-     * Bu durumda durum PENDING olmak zorunda değil.
-     * (Bu "reconstitution" constructor'ını persistence katmanı kullanacak.)
-     */
-    public Job(UUID id, String type, JobStatus status) {
+    // PRIVATE: dışarıdan "her durumda iş uydurmak" mümkün olmasın.
+    private Job(UUID id, String type, JobStatus status) {
         this.id = id;
         this.type = type;
         this.status = status;
+    }
+
+    /**
+     * Var olan bir işi (ör. veritabanından okunan) YENİDEN KURAR.
+     *
+     * İsmi bilinçli: bu, "yeni iş oluşturmak" değil, kalıcı bir işi olduğu durumla
+     * geri getirmektir (durumu PENDING olmak zorunda değil). Yalnızca persistence
+     * katmanı kullanmalı. Böylece kimse yanlışlıkla `new Job(id, type, DONE)` deyip
+     * hiç çalışmamış bir işi DONE gibi gösteremez — o kapı artık kapalı.
+     */
+    public static Job reconstitute(UUID id, String type, JobStatus status) {
+        return new Job(id, type, status);
     }
 
     // ── Durum geçişleri (işin kuralları) ─────────────────────────────
