@@ -22,9 +22,15 @@ It's not a product. Nobody's going to use it to send emails.
 
 You `POST` a job. The API creates it as `PENDING`, drops its id on a queue, and returns **`202 Accepted`** immediately — it does **not** run the work. A separate worker pulls the id off the queue, runs the job, and updates its status. You `GET` the id to watch it move:
 
-```
-PENDING ──► RUNNING ──► DONE
-                 └────► FAILED
+```mermaid
+stateDiagram-v2
+    [*] --> PENDING: POST /jobs
+    PENDING --> RUNNING: worker starts it
+    RUNNING --> DONE: success
+    RUNNING --> FAILED: permanent error
+    RUNNING --> RUNNING: transient error (retry)
+    DONE --> [*]
+    FAILED --> [*]
 ```
 
 Invalid transitions are impossible, not discouraged. `PENDING -> DONE` throws. `DONE -> RUNNING` throws. The `Job` object refuses to be put into an inconsistent state, so no caller can bypass the rules — not the controller, not the worker, not me at 2am.
@@ -64,22 +70,32 @@ domain/                  Pure Java, no framework
 
 ### Runtime — producer, queue, worker
 
-```
-        POST /jobs                                     GET /jobs/{id}
-            │                                                │
-            ▼                                                ▼
-     SubmitJobService                                  GetJobService
-       │        │                                           │
-  save PENDING  └─ enqueue(jobId) ─► jobs-queue (SQS)        │
-       │                                 │  ▲                │
-       ▼                                 │  │ retry          ▼
-    Postgres  ◄──────────────────────────┼──┼──────────  Postgres
-    (source of truth)                    ▼  │           (PENDING→RUNNING→
-                                    JobWorker│            DONE/FAILED)
-                                  (runs job) │
-                                     3 fails │
-                                        ▼    │
-                                    jobs-dlq ─► DLQ listener → marks FAILED
+```mermaid
+flowchart TB
+    Client(["Client"])
+    Submit["SubmitJobService"]
+    Get["GetJobService"]
+    Worker["JobWorker (SqsListener)"]
+    DlqL["DLQ listener"]
+    Q[["jobs-queue (SQS)"]]
+    DLQ[["jobs-dlq (SQS)"]]
+    DB[("PostgreSQL")]
+    Cache[("Redis cache")]
+
+    Client -->|"POST /jobs"| Submit
+    Submit -->|"save PENDING"| DB
+    Submit -->|"enqueue jobId"| Q
+    Submit -.->|"202 + jobId"| Client
+
+    Q -->|"consume"| Worker
+    Worker -->|"run job, update status"| DB
+    Q -->|"3 fails (redrive)"| DLQ
+    DLQ -->|"consume"| DlqL
+    DlqL -->|"mark FAILED"| DB
+
+    Client -->|"GET /jobs/:id"| Get
+    Get -->|"read"| DB
+    Get -.->|"cache terminal only"| Cache
 ```
 
 The queue holds only the **jobId** (a small "ticket"); the full job record lives in Postgres (the single source of truth). The worker takes a ticket, loads the job, runs it, and updates the DB.
