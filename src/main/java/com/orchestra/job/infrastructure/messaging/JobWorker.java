@@ -2,6 +2,8 @@ package com.orchestra.job.infrastructure.messaging;
 
 import com.orchestra.job.application.DeadLetterService;
 import com.orchestra.job.application.ExecuteJobService;
+import com.orchestra.job.domain.Job;
+import com.orchestra.job.infrastructure.metrics.JobMetrics;
 import io.awspring.cloud.sqs.annotation.SqsListener;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -36,17 +38,25 @@ public class JobWorker {
 
     private final DeadLetterService deadLetterService;
 
-    public JobWorker(ExecuteJobService executeJobService, DeadLetterService deadLetterService) {
+    private final JobMetrics jobMetrics;
+
+    public JobWorker(ExecuteJobService executeJobService,
+                     DeadLetterService deadLetterService,
+                     JobMetrics jobMetrics) {
         this.executeJobService = executeJobService;
         this.deadLetterService = deadLetterService;
+        this.jobMetrics = jobMetrics;
     }
 
     @SqsListener("${app.sqs.queue-name}")
     public void onMessage(String jobId) {
         log.info("Kuyruktan iş alındı: {}", jobId);
-        executeJobService.execute(UUID.fromString(jobId));
-        // Normal biterse spring-cloud-aws mesajı siler. execute() geçici hatada
-        // istisna fırlatırsa mesaj silinmez -> SQS tekrar teslim eder (retry).
+        Job job = executeJobService.execute(UUID.fromString(jobId));
+        // execute() geçici hatada istisna fırlatır (buraya gelmez) -> mesaj silinmez,
+        // SQS retry'lar. Buraya geldiyse iş terminal'e ulaştı (DONE/FAILED): say.
+        if (job.getStatus().isTerminal()) {
+            jobMetrics.recordCompleted(job.getStatus());
+        }
     }
 
     /**
@@ -57,5 +67,6 @@ public class JobWorker {
     public void onDeadLetter(String jobId) {
         log.warn("DLQ'dan iş alındı: {}", jobId);
         deadLetterService.handleDeadLetter(UUID.fromString(jobId));
+        jobMetrics.recordDeadLettered();
     }
 }

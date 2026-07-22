@@ -55,6 +55,30 @@
           "legendFormat": "heap used"
         }
       ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "İş hızı — gönderilen vs tamamlanan (job/s)",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "ops" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "rate(jobs_submitted_total[1m])", "legendFormat": "submitted" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "sum by (result) (rate(jobs_completed_total[1m]))", "legendFormat": "completed {{result}}" }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "Toplam iş sonuçları (done / failed / dlq)",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },
+      "targets": [
+        { "refId": "A", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "jobs_completed_total", "legendFormat": "{{result}}" },
+        { "refId": "B", "datasource": { "type": "prometheus", "uid": "prometheus" }, "expr": "jobs_dead_lettered_total", "legendFormat": "dead-lettered" }
+      ]
     }
   ]
 }

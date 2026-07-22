@@ -3,6 +3,7 @@ package com.orchestra.job.infrastructure.web;
 import com.orchestra.job.application.GetJobService;
 import com.orchestra.job.application.SubmitJobService;
 import com.orchestra.job.domain.Job;
+import com.orchestra.job.infrastructure.metrics.JobMetrics;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
@@ -37,11 +38,14 @@ public class JobController {
 
     private final SubmitJobService submitJobService;
     private final GetJobService getJobService;
+    private final JobMetrics jobMetrics;
 
     public JobController(SubmitJobService submitJobService,
-                         GetJobService getJobService) {
+                         GetJobService getJobService,
+                         JobMetrics jobMetrics) {
         this.submitJobService = submitJobService;
         this.getJobService = getJobService;
+        this.jobMetrics = jobMetrics;
     }
 
     /**
@@ -63,6 +67,7 @@ public class JobController {
             description = "İşi PENDING oluşturur, kuyruğa bırakır ve jobId ile hemen döner")
     public JobResponse submit(@Valid @RequestBody CreateJobRequest request) {
         Job job = submitJobService.submit(request.type());
+        jobMetrics.recordSubmitted();
         return JobResponse.from(job);
     }
 
